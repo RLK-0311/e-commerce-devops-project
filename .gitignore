@@ -1,0 +1,21 @@
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+
+# Node.js
+node_modules/
+npm-debug.log*
+
+# Python
+venv/
+__pycache__/
+*.py[cod]
+
+# Logs
+logs/
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
