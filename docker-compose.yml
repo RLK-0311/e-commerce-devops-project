@@ -3,22 +3,29 @@ services:
   nginx:
     image: nginx:alpine
     container_name: ecommerce-nginx
+
     ports:
       - "8080:80"
+
     volumes:
       - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+
     depends_on:
       - backend
+
     deploy:
       resources:
         limits:
           cpus: "0.5"
           memory: 128M
 
+
   backend:
     build:
       context: ./backend
+
     container_name: ecommerce-backend
+
     restart: unless-stopped
 
     deploy:
@@ -33,27 +40,39 @@ services:
       DB_USER: ${DB_USER}
       DB_PASSWORD: ${DB_PASSWORD}
       DB_NAME: ${DB_NAME}
+
     depends_on:
       mysql:
         condition: service_healthy
 
     healthcheck:
-      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3000/health', res => process.exit(res.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"]
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "require('http').get('http://localhost:3000/health', res => process.exit(res.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"
+        ]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 10s
 
+
   mysql:
     image: mysql:8.4
+
     container_name: ecommerce-mysql
+
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       MYSQL_DATABASE: ${DB_NAME}
       MYSQL_USER: ${DB_USER}
       MYSQL_PASSWORD: ${DB_PASSWORD}
+
     volumes:
       - mysql_data:/var/lib/mysql
+
     healthcheck:
       test:
         [
@@ -76,6 +95,33 @@ services:
         limits:
           cpus: "2.0"
           memory: 1G
+
+
+  redis:
+    image: redis:7-alpine
+
+    container_name: ecommerce-redis
+
+    restart: unless-stopped
+
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "redis-cli",
+          "ping"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+
 
 volumes:
   mysql_data:
