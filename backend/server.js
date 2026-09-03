@@ -5,6 +5,12 @@ const app = express();
 
 const PORT = 3000;
 
+app.get("/health", (req, res) => {
+  res.status(200).json({
+    status: "healthy"
+  });
+});
+
 app.get("/", (req, res) => {
   res.json({
     message: "E-Commerce Backend is running",
