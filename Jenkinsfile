@@ -113,7 +113,7 @@ pipeline {
                     steps {
                         sh '''
                             echo "Building Prometheus image..."
-                            docker compose pull prometheus
+                            docker compose build prometheus
                         '''
                     }
                 }
