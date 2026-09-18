@@ -1,0 +1,19 @@
+{
+  "name": "ecommerce-mysql-connector",
+  "config": {
+    "connector.class": "io.debezium.connector.mysql.MySqlConnector",
+
+    "database.hostname": "mysql",
+    "database.port": "3306",
+    "database.user": "${DEBEZIUM_USER}",
+    "database.password": "${DEBEZIUM_PASSWORD}",
+
+    "database.server.id": "184054",
+    "topic.prefix": "ecommerce",
+
+    "database.include.list": "ecommerce",
+
+    "schema.history.internal.kafka.bootstrap.servers": "kafka:9092",
+    "schema.history.internal.kafka.topic": "schemahistory.ecommerce"
+  }
+}
