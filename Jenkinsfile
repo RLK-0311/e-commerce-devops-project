@@ -3,6 +3,16 @@ pipeline {
 
     environment {
         COMPOSE_PROJECT_NAME = 'ecommerce-platform'
+
+        // Non-secret Docker Compose configuration
+        DB_HOST = 'mysql'
+        DB_PORT = '3306'
+        DB_USER = 'ecommerce_user'
+        DB_NAME = 'ecommerce'
+
+        // Secrets stored in Jenkins Credentials
+        DB_PASSWORD = credentials('ecommerce-db-password')
+        MYSQL_ROOT_PASSWORD = credentials('ecommerce-mysql-root-password')
     }
 
     options {
@@ -336,7 +346,7 @@ pipeline {
                     if [ -n "$backend_container" ]; then
 
                         docker inspect \
-                            -f '{{range .State.Health.Log}}{{.Start}} | Exit={{.ExitCode}} | {{.Output}}{{"\\n"}}{{end}}' \
+                            -f '{{range .State.Health.Log}}{{.Start}} | Exit={{.ExitCode}} | {{.Output}}{{"\n"}}{{end}}' \
                             "$backend_container" \
                             2>/dev/null || true
 
