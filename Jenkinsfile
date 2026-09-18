@@ -103,8 +103,8 @@ pipeline {
                 stage('Nginx') {
                     steps {
                         sh '''
-                            echo "Checking Nginx image..."
-                            docker compose pull nginx
+                            echo "Building Nginx image..."
+                            docker compose build nginx
                         '''
                     }
                 }
