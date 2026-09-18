@@ -112,7 +112,7 @@ pipeline {
                 stage('Prometheus') {
                     steps {
                         sh '''
-                            echo "Checking Prometheus image..."
+                            echo "Building Prometheus image..."
                             docker compose pull prometheus
                         '''
                     }
