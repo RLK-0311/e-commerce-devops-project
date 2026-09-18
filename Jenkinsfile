@@ -69,83 +69,52 @@ pipeline {
         stage('Docker Services') {
             parallel {
 
-                stage('Backend') {
+                // -------------------------------------------------
+                // APPLICATION-OWNED IMAGES
+                // -------------------------------------------------
+                stage('Build Application Images') {
                     steps {
                         sh '''
-                            echo "Building backend Docker image..."
-                            docker compose build backend
+                            set -e
+
+                            echo "========================================="
+                            echo "Building application-owned Docker images"
+                            echo "========================================="
+
+                            docker compose build \
+                                backend \
+                                nginx \
+                                prometheus
+
+                            echo ""
+                            echo "Application images built successfully"
                         '''
                     }
                 }
 
-                stage('MySQL') {
-                    steps {
-                        sh '''
-                            echo "Checking MySQL image..."
-                            docker compose pull mysql
-                        '''
-                    }
-                }
 
-                stage('Redis') {
+                // -------------------------------------------------
+                // THIRD-PARTY / INFRASTRUCTURE IMAGES
+                // -------------------------------------------------
+                stage('Pull Infrastructure Images') {
                     steps {
                         sh '''
-                            echo "Checking Redis image..."
-                            docker compose pull redis
-                        '''
-                    }
-                }
+                            set -e
 
-                stage('Kafka') {
-                    steps {
-                        sh '''
-                            echo "Checking Kafka image..."
-                            docker compose pull kafka
-                        '''
-                    }
-                }
+                            echo "========================================="
+                            echo "Pulling infrastructure Docker images"
+                            echo "========================================="
 
-                stage('Kafka Connect') {
-                    steps {
-                        sh '''
-                            echo "Checking Kafka Connect image..."
-                            docker compose pull kafka-connect
-                        '''
-                    }
-                }
+                            docker compose pull \
+                                mysql \
+                                redis \
+                                kafka \
+                                kafka-connect \
+                                grafana \
+                                cadvisor
 
-                stage('Nginx') {
-                    steps {
-                        sh '''
-                            echo "Building Nginx image..."
-                            docker compose build nginx
-                        '''
-                    }
-                }
-
-                stage('Prometheus') {
-                    steps {
-                        sh '''
-                            echo "Building Prometheus image..."
-                            docker compose build prometheus
-                        '''
-                    }
-                }
-
-                stage('Grafana') {
-                    steps {
-                        sh '''
-                            echo "Checking Grafana image..."
-                            docker compose pull grafana
-                        '''
-                    }
-                }
-
-                stage('cAdvisor') {
-                    steps {
-                        sh '''
-                            echo "Checking cAdvisor image..."
-                            docker compose pull cadvisor
+                            echo ""
+                            echo "Infrastructure images pulled successfully"
                         '''
                     }
                 }
@@ -179,6 +148,8 @@ pipeline {
         stage('Docker Images') {
             steps {
                 sh '''
+                    set -e
+
                     echo "========================================="
                     echo "Docker images"
                     echo "========================================="
@@ -236,47 +207,66 @@ pipeline {
                         failed=0
                         starting=0
 
-                        printf "%-20s %-15s %-15s\\n" "SERVICE" "STATE" "HEALTH"
-                        printf "%-20s %-15s %-15s\\n" "-------" "-----" "------"
+                        printf "%-20s %-15s %-15s\\n" \
+                            "SERVICE" "STATE" "HEALTH"
+
+                        printf "%-20s %-15s %-15s\\n" \
+                            "-------" "-----" "------"
+
 
                         for service in $services; do
 
                             container_id=$(docker compose ps -q "$service" 2>/dev/null || true)
 
                             if [ -z "$container_id" ]; then
+
                                 printf "%-20s %-15s %-15s\\n" \
                                     "$service" "MISSING" "-"
+
                                 failed=1
                                 continue
                             fi
 
+
                             state=$(docker inspect \
                                 -f '{{.State.Status}}' \
-                                "$container_id" 2>/dev/null || echo "unknown")
+                                "$container_id" \
+                                2>/dev/null || echo "unknown")
+
 
                             health=$(docker inspect \
                                 -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' \
-                                "$container_id" 2>/dev/null || echo "unknown")
+                                "$container_id" \
+                                2>/dev/null || echo "unknown")
+
 
                             printf "%-20s %-15s %-15s\\n" \
                                 "$service" "$state" "$health"
 
+
                             if [ "$state" != "running" ]; then
+
                                 failed=1
 
                             elif [ "$health" = "starting" ]; then
+
                                 starting=1
 
-                            elif [ "$health" != "healthy" ] && [ "$health" != "none" ]; then
+                            elif [ "$health" != "healthy" ] && \
+                                 [ "$health" != "none" ]; then
+
                                 failed=1
+
                             fi
 
                         done
 
+
                         echo ""
 
+
                         # -------------------------------------------------
-                        # SUCCESS CONDITION
+                        # SUCCESS
                         # -------------------------------------------------
                         if [ "$failed" -eq 0 ] && [ "$starting" -eq 0 ]; then
 
@@ -302,7 +292,7 @@ pipeline {
 
 
                         # -------------------------------------------------
-                        # STILL STARTING
+                        # SERVICES STILL STARTING
                         # -------------------------------------------------
                         echo "Some services are still starting."
                         echo "Waiting 5 seconds before checking again..."
@@ -314,9 +304,9 @@ pipeline {
                     done
 
 
-                    // -----------------------------------------------------
-                    // TIMEOUT
-                    // -----------------------------------------------------
+                    # -----------------------------------------------------
+                    # TIMEOUT
+                    # -----------------------------------------------------
                     echo "========================================="
                     echo "Service verification timed out."
                     echo "========================================="
@@ -325,9 +315,26 @@ pipeline {
                     echo "Final Docker Compose status:"
                     docker compose ps
 
+
                     echo ""
                     echo "Backend logs:"
                     docker compose logs --tail=50 backend
+
+
+                    echo ""
+                    echo "Recent health-check information:"
+
+                    backend_container=$(docker compose ps -q backend 2>/dev/null || true)
+
+                    if [ -n "$backend_container" ]; then
+
+                        docker inspect \
+                            -f '{{range .State.Health.Log}}{{.Start}} | Exit={{.ExitCode}} | {{.Output}}{{"\\n"}}{{end}}' \
+                            "$backend_container" \
+                            2>/dev/null || true
+
+                    fi
+
 
                     exit 1
                 '''
@@ -368,17 +375,27 @@ pipeline {
 
                         try:
                             container_id = subprocess.check_output(
-                                ["docker", "compose", "ps", "-q", service],
+                                [
+                                    "docker",
+                                    "compose",
+                                    "ps",
+                                    "-q",
+                                    service
+                                ],
                                 text=True
                             ).strip()
+
                         except subprocess.CalledProcessError:
                             container_id = ""
 
+
                         if not container_id:
+
                             status = "FAILED"
                             detail = "container not found"
 
                         else:
+
                             try:
                                 docker_state = subprocess.check_output(
                                     [
@@ -390,6 +407,7 @@ pipeline {
                                     ],
                                     text=True
                                 ).strip()
+
 
                                 health = subprocess.check_output(
                                     [
@@ -403,24 +421,34 @@ pipeline {
                                 ).strip()
 
                             except subprocess.CalledProcessError:
+
                                 docker_state = "unknown"
                                 health = "unknown"
 
+
                             if docker_state == "running" and health == "healthy":
+
                                 status = "HEALTHY"
                                 detail = "running + healthy"
 
                             elif docker_state == "running" and health == "none":
+
                                 status = "RUNNING"
                                 detail = "running without healthcheck"
 
                             elif docker_state == "running" and health == "starting":
+
                                 status = "STARTING"
                                 detail = "healthcheck still starting"
 
                             else:
+
                                 status = "FAILED"
-                                detail = f"state={docker_state}, health={health}"
+                                detail = (
+                                    f"state={docker_state}, "
+                                    f"health={health}"
+                                )
+
 
                         rows.append(
                             (
@@ -435,7 +463,9 @@ pipeline {
                         f"""
                         <tr>
                             <td>{service}</td>
-                            <td class="{status.lower()}">{status}</td>
+                            <td class="{status.lower()}">
+                                {status}
+                            </td>
                             <td>{detail}</td>
                         </tr>
                         """
@@ -443,11 +473,14 @@ pipeline {
                     )
 
 
-                    generated = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    generated = datetime.now().strftime(
+                        "%Y-%m-%d %H:%M:%S"
+                    )
 
 
                     html = f"""<!DOCTYPE html>
                     <html>
+
                     <head>
 
                     <meta charset="UTF-8">
@@ -495,7 +528,8 @@ pipeline {
                             background: white;
                             border-radius: 12px;
                             padding: 18px;
-                            box-shadow: 0 2px 8px rgba(0,0,0,.08);
+                            box-shadow:
+                                0 2px 8px rgba(0,0,0,.08);
                         }}
 
                         .layer-title {{
@@ -536,7 +570,8 @@ pipeline {
                         th,
                         td {{
                             padding: 12px;
-                            border-bottom: 1px solid #e5e7e9;
+                            border-bottom:
+                                1px solid #e5e7e9;
                             text-align: left;
                         }}
 
@@ -569,7 +604,10 @@ pipeline {
                             margin-top: 25px;
                             display: grid;
                             grid-template-columns:
-                                repeat(auto-fit, minmax(200px, 1fr));
+                                repeat(
+                                    auto-fit,
+                                    minmax(200px, 1fr)
+                                );
                             gap: 12px;
                         }}
 
@@ -577,7 +615,8 @@ pipeline {
                             background: white;
                             padding: 16px;
                             border-radius: 10px;
-                            box-shadow: 0 2px 8px rgba(0,0,0,.08);
+                            box-shadow:
+                                0 2px 8px rgba(0,0,0,.08);
                         }}
 
                         .info-title {{
@@ -593,6 +632,7 @@ pipeline {
                         }}
 
                         @media (max-width: 700px) {{
+
                             body {{
                                 padding: 15px;
                             }}
@@ -600,17 +640,21 @@ pipeline {
                             .node {{
                                 width: 100%;
                             }}
+
                         }}
 
                     </style>
 
                     </head>
 
+
                     <body>
 
                     <div class="container">
 
-                        <h1>E-Commerce CI/CD Architecture</h1>
+                        <h1>
+                            E-Commerce CI/CD Architecture
+                        </h1>
 
                         <div class="subtitle">
                             Generated by Jenkins • {generated}
@@ -620,6 +664,7 @@ pipeline {
                         <div class="pipeline-info">
 
                             <div class="info-card">
+
                                 <div class="info-title">
                                     CI/CD
                                 </div>
@@ -627,9 +672,12 @@ pipeline {
                                 <div class="info-value">
                                     Jenkins
                                 </div>
+
                             </div>
 
+
                             <div class="info-card">
+
                                 <div class="info-title">
                                     Container Platform
                                 </div>
@@ -637,9 +685,12 @@ pipeline {
                                 <div class="info-value">
                                     Docker Compose
                                 </div>
+
                             </div>
 
+
                             <div class="info-card">
+
                                 <div class="info-title">
                                     Source Control
                                 </div>
@@ -647,9 +698,12 @@ pipeline {
                                 <div class="info-value">
                                     GitHub
                                 </div>
+
                             </div>
 
+
                             <div class="info-card">
+
                                 <div class="info-title">
                                     Environment
                                 </div>
@@ -657,6 +711,7 @@ pipeline {
                                 <div class="info-value">
                                     E-Commerce Platform
                                 </div>
+
                             </div>
 
                         </div>
@@ -665,6 +720,7 @@ pipeline {
                         <div class="flow">
 
                             <div class="layer">
+
                                 <div class="layer-title">
                                     Source
                                 </div>
@@ -676,10 +732,12 @@ pipeline {
                                     </div>
 
                                 </div>
+
                             </div>
 
 
                             <div class="layer">
+
                                 <div class="layer-title">
                                     Frontend
                                 </div>
@@ -691,10 +749,12 @@ pipeline {
                                     </div>
 
                                 </div>
+
                             </div>
 
 
                             <div class="layer">
+
                                 <div class="layer-title">
                                     Application
                                 </div>
@@ -710,12 +770,14 @@ pipeline {
                                     </div>
 
                                 </div>
+
                             </div>
 
 
                             <div class="layer">
+
                                 <div class="layer-title">
-                                    Data & Messaging
+                                    Data &amp; Messaging
                                 </div>
 
                                 <div class="nodes">
@@ -737,10 +799,12 @@ pipeline {
                                     </div>
 
                                 </div>
+
                             </div>
 
 
                             <div class="layer">
+
                                 <div class="layer-title">
                                     Monitoring
                                 </div>
@@ -760,6 +824,7 @@ pipeline {
                                     </div>
 
                                 </div>
+
                             </div>
 
                         </div>
@@ -768,6 +833,7 @@ pipeline {
                         <h2>
                             Live Docker Service Status
                         </h2>
+
 
                         <table>
 
@@ -793,6 +859,7 @@ pipeline {
                         "w",
                         encoding="utf-8"
                     ) as f:
+
                         f.write(html)
 
 
@@ -819,6 +886,7 @@ pipeline {
             echo 'Pipeline Summary'
             echo '========================================='
 
+
             sh '''
                 echo "Docker Compose service summary:"
 
@@ -843,6 +911,7 @@ pipeline {
                         reportName: 'E-Commerce Architecture Dashboard'
                     ])
 
+
                     archiveArtifacts(
                         artifacts: 'dashboard/index.html',
                         allowEmptyArchive: true
@@ -851,6 +920,7 @@ pipeline {
                 } else {
 
                     echo 'Architecture dashboard was not generated because an earlier pipeline stage failed.'
+
                 }
             }
 
@@ -864,6 +934,7 @@ pipeline {
             echo '========================================='
             echo 'E-Commerce CI/CD pipeline completed successfully'
             echo '========================================='
+
         }
 
 
@@ -872,6 +943,7 @@ pipeline {
             echo '========================================='
             echo 'E-Commerce CI/CD pipeline failed'
             echo '========================================='
+
         }
     }
 }
