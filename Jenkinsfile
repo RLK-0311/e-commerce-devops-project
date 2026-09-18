@@ -1,4 +1,3 @@
-```groovy
 pipeline {
     agent any
 
@@ -801,4 +800,3 @@ PYTHON
         }
     }
 }
-```
