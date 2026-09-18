@@ -1,18 +1,21 @@
 pipeline {
     agent any
 
+    environment {
+        COMPOSE_PROJECT_NAME = 'ecommerce-platform'
+    }
+
     options {
         timestamps()
         disableConcurrentBuilds()
         skipDefaultCheckout(true)
     }
 
-    environment {
-        COMPOSE_PROJECT_NAME = 'ecommerce-platform'
-    }
-
     stages {
 
+        // =========================================================
+        // CHECKOUT
+        // =========================================================
         stage('Checkout') {
             steps {
                 echo '========================================='
@@ -28,9 +31,15 @@ pipeline {
             }
         }
 
+
+        // =========================================================
+        // PROJECT VALIDATION
+        // =========================================================
         stage('Validate Project') {
             steps {
                 sh '''
+                    set -e
+
                     echo "========================================="
                     echo "Validating E-Commerce project"
                     echo "========================================="
@@ -45,6 +54,7 @@ pipeline {
                     echo "Prometheus configuration file:"
                     ls -l monitoring/prometheus/prometheus.yml
 
+                    echo "Validating Docker Compose configuration..."
                     docker compose config --quiet
 
                     echo "Project validation passed"
@@ -52,6 +62,10 @@ pipeline {
             }
         }
 
+
+        // =========================================================
+        // DOCKER SERVICES
+        // =========================================================
         stage('Docker Services') {
             parallel {
 
@@ -138,9 +152,15 @@ pipeline {
             }
         }
 
+
+        // =========================================================
+        // DOCKER COMPOSE VALIDATION
+        // =========================================================
         stage('Docker Compose Validation') {
             steps {
                 sh '''
+                    set -e
+
                     echo "========================================="
                     echo "Docker Compose validation"
                     echo "========================================="
@@ -152,6 +172,10 @@ pipeline {
             }
         }
 
+
+        // =========================================================
+        // DOCKER IMAGES
+        // =========================================================
         stage('Docker Images') {
             steps {
                 sh '''
@@ -164,9 +188,15 @@ pipeline {
             }
         }
 
+
+        // =========================================================
+        // DEPLOYMENT
+        // =========================================================
         stage('Docker Deployment') {
             steps {
                 sh '''
+                    set -e
+
                     echo "========================================="
                     echo "Deploying E-Commerce platform"
                     echo "========================================="
@@ -175,385 +205,616 @@ pipeline {
 
                     echo ""
                     echo "Docker Compose deployment completed"
-                    echo ""
-
-                    docker compose ps
                 '''
             }
         }
 
+
+        // =========================================================
+        // SERVICE VERIFICATION
+        // =========================================================
         stage('Service Verification') {
             steps {
                 sh '''
+                    set -e
+
                     echo "========================================="
                     echo "Verifying Docker services"
                     echo "========================================="
 
                     services="backend mysql redis kafka kafka-connect nginx prometheus grafana cadvisor"
 
-                    FAILED=0
+                    max_attempts=24
+                    attempt=1
 
-                    printf "%-20s %-15s %-15s\\n" "SERVICE" "STATE" "HEALTH"
-                    printf "%-20s %-15s %-15s\\n" "--------------------" "---------------" "---------------"
+                    while [ "$attempt" -le "$max_attempts" ]; do
 
-                    for service in $services
-                    do
-                        container=$(docker compose ps -q "$service")
+                        echo ""
+                        echo "Verification attempt $attempt/$max_attempts"
+                        echo "-----------------------------------------"
 
-                        if [ -z "$container" ]; then
-                            printf "%-20s %-15s %-15s\\n" "$service" "MISSING" "FAILED"
-                            FAILED=1
-                            continue
+                        failed=0
+                        starting=0
+
+                        printf "%-20s %-15s %-15s\\n" "SERVICE" "STATE" "HEALTH"
+                        printf "%-20s %-15s %-15s\\n" "-------" "-----" "------"
+
+                        for service in $services; do
+
+                            container_id=$(docker compose ps -q "$service" 2>/dev/null || true)
+
+                            if [ -z "$container_id" ]; then
+                                printf "%-20s %-15s %-15s\\n" \
+                                    "$service" "MISSING" "-"
+                                failed=1
+                                continue
+                            fi
+
+                            state=$(docker inspect \
+                                -f '{{.State.Status}}' \
+                                "$container_id" 2>/dev/null || echo "unknown")
+
+                            health=$(docker inspect \
+                                -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' \
+                                "$container_id" 2>/dev/null || echo "unknown")
+
+                            printf "%-20s %-15s %-15s\\n" \
+                                "$service" "$state" "$health"
+
+                            if [ "$state" != "running" ]; then
+                                failed=1
+
+                            elif [ "$health" = "starting" ]; then
+                                starting=1
+
+                            elif [ "$health" != "healthy" ] && [ "$health" != "none" ]; then
+                                failed=1
+                            fi
+
+                        done
+
+                        echo ""
+
+                        # -------------------------------------------------
+                        # SUCCESS CONDITION
+                        # -------------------------------------------------
+                        if [ "$failed" -eq 0 ] && [ "$starting" -eq 0 ]; then
+
+                            echo "========================================="
+                            echo "All required Docker services are healthy/running."
+                            echo "========================================="
+
+                            exit 0
                         fi
 
-                        state=$(docker inspect \
-                            --format '{{.State.Status}}' \
-                            "$container" 2>/dev/null || echo "unknown")
 
-                        health=$(docker inspect \
-                            --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}no-healthcheck{{end}}' \
-                            "$container" 2>/dev/null || echo "unknown")
+                        # -------------------------------------------------
+                        # ACTUAL FAILURE
+                        # -------------------------------------------------
+                        if [ "$failed" -eq 1 ] && [ "$starting" -eq 0 ]; then
 
-                        if [ "$state" != "running" ]; then
-                            status="FAILED"
-                            FAILED=1
+                            echo "========================================="
+                            echo "One or more services failed verification."
+                            echo "========================================="
 
-                        elif [ "$health" = "unhealthy" ]; then
-                            status="FAILED"
-                            FAILED=1
-
-                        elif [ "$health" = "starting" ]; then
-                            status="STARTING"
-                            FAILED=1
-
-                        elif [ "$health" = "healthy" ]; then
-                            status="HEALTHY"
-
-                        elif [ "$health" = "no-healthcheck" ]; then
-                            status="RUNNING"
-
-                        else
-                            status="FAILED"
-                            FAILED=1
+                            exit 1
                         fi
 
-                        printf "%-20s %-15s %-15s\\n" \
-                            "$service" "$state" "$status"
+
+                        # -------------------------------------------------
+                        # STILL STARTING
+                        # -------------------------------------------------
+                        echo "Some services are still starting."
+                        echo "Waiting 5 seconds before checking again..."
+
+                        sleep 5
+
+                        attempt=$((attempt + 1))
+
                     done
 
+
+                    // -----------------------------------------------------
+                    // TIMEOUT
+                    // -----------------------------------------------------
+                    echo "========================================="
+                    echo "Service verification timed out."
+                    echo "========================================="
+
                     echo ""
+                    echo "Final Docker Compose status:"
+                    docker compose ps
 
-                    if [ "$FAILED" -ne 0 ]; then
-                        echo "One or more Docker services failed verification."
-                        docker compose ps
-                        exit 1
-                    fi
+                    echo ""
+                    echo "Backend logs:"
+                    docker compose logs --tail=50 backend
 
-                    echo "All Docker services passed verification."
+                    exit 1
                 '''
             }
         }
 
+
+        // =========================================================
+        // GENERATE ARCHITECTURE DASHBOARD
+        // =========================================================
         stage('Generate Architecture Dashboard') {
             steps {
                 sh '''
-                    echo "========================================="
-                    echo "Generating Architecture Dashboard"
-                    echo "========================================="
+                    set -e
 
                     mkdir -p dashboard
 
-                    python3 <<'PYTHON'
-import subprocess
-from datetime import datetime
+                    python3 - <<'PY'
+                    import subprocess
+                    from datetime import datetime
+                    from html import escape
 
-services = [
-    ("backend", "Node.js / Express", "Application"),
-    ("mysql", "MySQL 8.4", "Database"),
-    ("redis", "Redis 7", "Caching"),
-    ("kafka", "Apache Kafka", "Messaging"),
-    ("kafka-connect", "Kafka Connect / Debezium", "Data Integration"),
-    ("nginx", "Nginx", "Web / Reverse Proxy"),
-    ("prometheus", "Prometheus", "Monitoring"),
-    ("grafana", "Grafana", "Observability"),
-    ("cadvisor", "cAdvisor", "Container Monitoring"),
-]
+                    services = [
+                        "backend",
+                        "mysql",
+                        "redis",
+                        "kafka",
+                        "kafka-connect",
+                        "nginx",
+                        "prometheus",
+                        "grafana",
+                        "cadvisor",
+                    ]
 
-def get_service_status(service):
-    try:
-        container = subprocess.check_output(
-            ["docker", "compose", "ps", "-q", service],
-            text=True
-        ).strip()
+                    rows = []
 
-        if not container:
-            return "FAILED", "MISSING"
+                    for service in services:
 
-        state = subprocess.check_output(
-            ["docker", "inspect", "--format", "{{.State.Status}}", container],
-            text=True
-        ).strip()
+                        try:
+                            container_id = subprocess.check_output(
+                                ["docker", "compose", "ps", "-q", service],
+                                text=True
+                            ).strip()
+                        except subprocess.CalledProcessError:
+                            container_id = ""
 
-        health = subprocess.check_output(
-            [
-                "docker",
-                "inspect",
-                "--format",
-                "{{if .State.Health}}{{.State.Health.Status}}{{else}}no-healthcheck{{end}}",
-                container
-            ],
-            text=True
-        ).strip()
+                        if not container_id:
+                            status = "FAILED"
+                            detail = "container not found"
 
-        if state != "running":
-            return "FAILED", state.upper()
+                        else:
+                            try:
+                                docker_state = subprocess.check_output(
+                                    [
+                                        "docker",
+                                        "inspect",
+                                        "-f",
+                                        "{{.State.Status}}",
+                                        container_id
+                                    ],
+                                    text=True
+                                ).strip()
 
-        if health == "healthy":
-            return "HEALTHY", "healthy"
+                                health = subprocess.check_output(
+                                    [
+                                        "docker",
+                                        "inspect",
+                                        "-f",
+                                        "{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}",
+                                        container_id
+                                    ],
+                                    text=True
+                                ).strip()
 
-        if health == "starting":
-            return "STARTING", "starting"
+                            except subprocess.CalledProcessError:
+                                docker_state = "unknown"
+                                health = "unknown"
 
-        if health == "unhealthy":
-            return "FAILED", "unhealthy"
+                            if docker_state == "running" and health == "healthy":
+                                status = "HEALTHY"
+                                detail = "running + healthy"
 
-        if health == "no-healthcheck":
-            return "RUNNING", "no healthcheck"
+                            elif docker_state == "running" and health == "none":
+                                status = "RUNNING"
+                                detail = "running without healthcheck"
 
-        return "FAILED", health
+                            elif docker_state == "running" and health == "starting":
+                                status = "STARTING"
+                                detail = "healthcheck still starting"
 
-    except Exception as e:
-        return "FAILED", str(e)
+                            else:
+                                status = "FAILED"
+                                detail = f"state={docker_state}, health={health}"
 
-rows = []
+                        rows.append(
+                            (
+                                escape(service),
+                                escape(status),
+                                escape(detail)
+                            )
+                        )
 
-for service, technology, layer in services:
-    status, detail = get_service_status(service)
 
-    if status == "HEALTHY":
-        css = "healthy"
-    elif status == "RUNNING":
-        css = "running"
-    elif status == "STARTING":
-        css = "starting"
-    else:
-        css = "failed"
+                    html_rows = "".join(
+                        f"""
+                        <tr>
+                            <td>{service}</td>
+                            <td class="{status.lower()}">{status}</td>
+                            <td>{detail}</td>
+                        </tr>
+                        """
+                        for service, status, detail in rows
+                    )
 
-    rows.append(f"""
-        <div class="service {css}">
-            <div class="service-name">{service}</div>
-            <div class="technology">{technology}</div>
-            <div class="layer">{layer}</div>
-            <div class="status">{status}</div>
-            <div class="detail">{detail}</div>
-        </div>
-    """)
 
-generated = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    generated = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-html = f"""<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<title>E-Commerce CI/CD Architecture</title>
 
-<style>
-body {{
-    margin: 0;
-    font-family: Arial, Helvetica, sans-serif;
-    background: #111827;
-    color: #f9fafb;
-}}
+                    html = f"""<!DOCTYPE html>
+                    <html>
+                    <head>
 
-.header {{
-    padding: 30px;
-    background: #1f2937;
-    border-bottom: 1px solid #374151;
-}}
+                    <meta charset="UTF-8">
 
-.header h1 {{
-    margin: 0 0 8px 0;
-    font-size: 28px;
-}}
+                    <meta name="viewport"
+                          content="width=device-width, initial-scale=1.0">
 
-.header p {{
-    margin: 4px 0;
-    color: #9ca3af;
-}}
+                    <title>E-Commerce CI/CD Architecture</title>
 
-.pipeline {{
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    gap: 15px;
-    padding: 25px;
-    background: #0f172a;
-    flex-wrap: wrap;
-}}
+                    <style>
 
-.pipeline-box {{
-    padding: 14px 22px;
-    border-radius: 8px;
-    background: #374151;
-    border: 1px solid #4b5563;
-    font-weight: bold;
-}}
+                        * {{
+                            box-sizing: border-box;
+                        }}
 
-.arrow {{
-    color: #9ca3af;
-    font-size: 24px;
-}}
+                        body {{
+                            font-family: Arial, sans-serif;
+                            background: #f4f6f8;
+                            margin: 0;
+                            padding: 30px;
+                            color: #17202a;
+                        }}
 
-.architecture {{
-    padding: 30px;
-}}
+                        .container {{
+                            max-width: 1200px;
+                            margin: auto;
+                        }}
 
-.layer {{
-    color: #9ca3af;
-    font-size: 13px;
-}}
+                        h1 {{
+                            margin-bottom: 5px;
+                        }}
 
-.services {{
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-    gap: 18px;
-    margin-top: 20px;
-}}
+                        .subtitle {{
+                            color: #5f6b76;
+                            margin-bottom: 25px;
+                        }}
 
-.service {{
-    padding: 20px;
-    border-radius: 10px;
-    background: #1f2937;
-    border: 2px solid #374151;
-}}
+                        .flow {{
+                            display: flex;
+                            flex-direction: column;
+                            gap: 14px;
+                        }}
 
-.service.healthy {{
-    border-color: #22c55e;
-}}
+                        .layer {{
+                            background: white;
+                            border-radius: 12px;
+                            padding: 18px;
+                            box-shadow: 0 2px 8px rgba(0,0,0,.08);
+                        }}
 
-.service.running {{
-    border-color: #3b82f6;
-}}
+                        .layer-title {{
+                            font-weight: bold;
+                            font-size: 16px;
+                            margin-bottom: 12px;
+                        }}
 
-.service.starting {{
-    border-color: #eab308;
-}}
+                        .nodes {{
+                            display: flex;
+                            flex-wrap: wrap;
+                            gap: 10px;
+                        }}
 
-.service.failed {{
-    border-color: #ef4444;
-}}
+                        .node {{
+                            padding: 12px 16px;
+                            border-radius: 8px;
+                            background: #eaf2f8;
+                            border: 1px solid #ccd6dd;
+                            min-width: 130px;
+                            text-align: center;
+                        }}
 
-.service-name {{
-    font-size: 19px;
-    font-weight: bold;
-    margin-bottom: 8px;
-}}
+                        .source {{
+                            font-weight: bold;
+                            color: #566573;
+                        }}
 
-.technology {{
-    color: #d1d5db;
-    margin-bottom: 8px;
-}}
+                        table {{
+                            width: 100%;
+                            border-collapse: collapse;
+                            background: white;
+                            margin-top: 25px;
+                            border-radius: 10px;
+                            overflow: hidden;
+                        }}
 
-.status {{
-    display: inline-block;
-    margin-top: 12px;
-    padding: 5px 10px;
-    border-radius: 5px;
-    background: #374151;
-    font-size: 12px;
-    font-weight: bold;
-}}
+                        th,
+                        td {{
+                            padding: 12px;
+                            border-bottom: 1px solid #e5e7e9;
+                            text-align: left;
+                        }}
 
-.detail {{
-    margin-top: 8px;
-    color: #9ca3af;
-    font-size: 12px;
-}}
+                        th {{
+                            background: #17202a;
+                            color: white;
+                        }}
 
-.footer {{
-    padding: 20px 30px;
-    color: #6b7280;
-    border-top: 1px solid #374151;
-}}
-</style>
-</head>
+                        .healthy {{
+                            color: #1e8449;
+                            font-weight: bold;
+                        }}
 
-<body>
+                        .running {{
+                            color: #2471a3;
+                            font-weight: bold;
+                        }}
 
-<div class="header">
-    <h1>E-Commerce CI/CD Architecture</h1>
-    <p>Jenkins Build: #{env.BUILD_NUMBER}</p>
-    <p>Generated: {generated}</p>
-</div>
+                        .starting {{
+                            color: #b9770e;
+                            font-weight: bold;
+                        }}
 
-<div class="pipeline">
-    <div class="pipeline-box">Git</div>
-    <div class="arrow">→</div>
-    <div class="pipeline-box">Jenkins CI</div>
-    <div class="arrow">→</div>
-    <div class="pipeline-box">Docker Build</div>
-    <div class="arrow">→</div>
-    <div class="pipeline-box">Docker Deploy</div>
-    <div class="arrow">→</div>
-    <div class="pipeline-box">Service Verification</div>
-</div>
+                        .failed {{
+                            color: #c0392b;
+                            font-weight: bold;
+                        }}
 
-<div class="architecture">
+                        .pipeline-info {{
+                            margin-top: 25px;
+                            display: grid;
+                            grid-template-columns:
+                                repeat(auto-fit, minmax(200px, 1fr));
+                            gap: 12px;
+                        }}
 
-    <h2>Application Architecture</h2>
+                        .info-card {{
+                            background: white;
+                            padding: 16px;
+                            border-radius: 10px;
+                            box-shadow: 0 2px 8px rgba(0,0,0,.08);
+                        }}
 
-    <div class="services">
+                        .info-title {{
+                            font-size: 12px;
+                            color: #7b8794;
+                            text-transform: uppercase;
+                            margin-bottom: 6px;
+                        }}
 
-        <div class="service running">
-            <div class="service-name">Frontend</div>
-            <div class="technology">React</div>
-            <div class="layer">Application Source</div>
-            <div class="status">SOURCE</div>
-            <div class="detail">Frontend application directory</div>
-        </div>
+                        .info-value {{
+                            font-size: 18px;
+                            font-weight: bold;
+                        }}
 
-        {''.join(rows)}
+                        @media (max-width: 700px) {{
+                            body {{
+                                padding: 15px;
+                            }}
 
-    </div>
+                            .node {{
+                                width: 100%;
+                            }}
+                        }}
 
-</div>
+                    </style>
 
-<div class="footer">
-    E-Commerce DevOps Learning Project • Jenkins CI/CD
-</div>
+                    </head>
 
-</body>
-</html>
-"""
+                    <body>
 
-with open("dashboard/index.html", "w") as f:
-    f.write(html)
+                    <div class="container">
 
-print("Architecture dashboard generated successfully.")
-PYTHON
+                        <h1>E-Commerce CI/CD Architecture</h1>
 
-                    echo "Dashboard generated:"
-                    ls -lh dashboard/index.html
+                        <div class="subtitle">
+                            Generated by Jenkins • {generated}
+                        </div>
+
+
+                        <div class="pipeline-info">
+
+                            <div class="info-card">
+                                <div class="info-title">
+                                    CI/CD
+                                </div>
+
+                                <div class="info-value">
+                                    Jenkins
+                                </div>
+                            </div>
+
+                            <div class="info-card">
+                                <div class="info-title">
+                                    Container Platform
+                                </div>
+
+                                <div class="info-value">
+                                    Docker Compose
+                                </div>
+                            </div>
+
+                            <div class="info-card">
+                                <div class="info-title">
+                                    Source Control
+                                </div>
+
+                                <div class="info-value">
+                                    GitHub
+                                </div>
+                            </div>
+
+                            <div class="info-card">
+                                <div class="info-title">
+                                    Environment
+                                </div>
+
+                                <div class="info-value">
+                                    E-Commerce Platform
+                                </div>
+                            </div>
+
+                        </div>
+
+
+                        <div class="flow">
+
+                            <div class="layer">
+                                <div class="layer-title">
+                                    Source
+                                </div>
+
+                                <div class="nodes">
+
+                                    <div class="node source">
+                                        GitHub
+                                    </div>
+
+                                </div>
+                            </div>
+
+
+                            <div class="layer">
+                                <div class="layer-title">
+                                    Frontend
+                                </div>
+
+                                <div class="nodes">
+
+                                    <div class="node source">
+                                        React
+                                    </div>
+
+                                </div>
+                            </div>
+
+
+                            <div class="layer">
+                                <div class="layer-title">
+                                    Application
+                                </div>
+
+                                <div class="nodes">
+
+                                    <div class="node">
+                                        Nginx
+                                    </div>
+
+                                    <div class="node">
+                                        Node / Express Backend
+                                    </div>
+
+                                </div>
+                            </div>
+
+
+                            <div class="layer">
+                                <div class="layer-title">
+                                    Data & Messaging
+                                </div>
+
+                                <div class="nodes">
+
+                                    <div class="node">
+                                        MySQL
+                                    </div>
+
+                                    <div class="node">
+                                        Redis
+                                    </div>
+
+                                    <div class="node">
+                                        Kafka
+                                    </div>
+
+                                    <div class="node">
+                                        Kafka Connect
+                                    </div>
+
+                                </div>
+                            </div>
+
+
+                            <div class="layer">
+                                <div class="layer-title">
+                                    Monitoring
+                                </div>
+
+                                <div class="nodes">
+
+                                    <div class="node">
+                                        Prometheus
+                                    </div>
+
+                                    <div class="node">
+                                        Grafana
+                                    </div>
+
+                                    <div class="node">
+                                        cAdvisor
+                                    </div>
+
+                                </div>
+                            </div>
+
+                        </div>
+
+
+                        <h2>
+                            Live Docker Service Status
+                        </h2>
+
+                        <table>
+
+                            <tr>
+                                <th>Service</th>
+                                <th>Status</th>
+                                <th>Details</th>
+                            </tr>
+
+                            {html_rows}
+
+                        </table>
+
+                    </div>
+
+                    </body>
+                    </html>
+                    """
+
+
+                    with open(
+                        "dashboard/index.html",
+                        "w",
+                        encoding="utf-8"
+                    ) as f:
+                        f.write(html)
+
+
+                    print(
+                        "Architecture dashboard generated: "
+                        "dashboard/index.html"
+                    )
+
+                    PY
                 '''
             }
         }
     }
 
+
+    // =============================================================
+    // POST ACTIONS
+    // =============================================================
     post {
 
-        success {
-            echo '========================================='
-            echo 'E-Commerce CI/CD pipeline completed successfully'
-            echo '========================================='
-        }
-
-        failure {
-            echo '========================================='
-            echo 'E-Commerce CI/CD pipeline failed'
-            echo '========================================='
-        }
-
         always {
+
             echo '========================================='
             echo 'Pipeline Summary'
             echo '========================================='
@@ -561,13 +822,18 @@ PYTHON
             sh '''
                 echo "Docker Compose service summary:"
 
-                docker compose ps --format "{{.Service}}|{{.State}}|{{.Health}}" || true
+                docker compose ps \
+                    --format "{{.Service}}|{{.State}}|{{.Health}}" \
+                    || true
             '''
 
-            script {
-                def dashboardExists = fileExists('dashboard/index.html')
 
-                if (dashboardExists) {
+            script {
+
+                if (fileExists('dashboard/index.html')) {
+
+                    echo 'Publishing architecture dashboard'
+
                     publishHTML(target: [
                         allowMissing: true,
                         alwaysLinkToLastBuild: true,
@@ -581,12 +847,32 @@ PYTHON
                         artifacts: 'dashboard/index.html',
                         allowEmptyArchive: true
                     )
+
                 } else {
+
                     echo 'Architecture dashboard was not generated because an earlier pipeline stage failed.'
                 }
             }
 
+
             echo 'Docker CI/CD pipeline finished'
+        }
+
+
+        success {
+
+            echo '========================================='
+            echo 'E-Commerce CI/CD pipeline completed successfully'
+            echo '========================================='
+        }
+
+
+        failure {
+
+            echo '========================================='
+            echo 'E-Commerce CI/CD pipeline failed'
+            echo '========================================='
         }
     }
 }
+
