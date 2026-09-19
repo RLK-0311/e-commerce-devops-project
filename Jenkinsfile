@@ -33,7 +33,32 @@ pipeline {
                 deleteDir()
 
                 echo 'Checking out source code...'
-                checkout scm
+
+                script {
+                    def scmVars = checkout(scm)
+
+                    env.DEPLOYED_GIT_COMMIT = scmVars.GIT_COMMIT ?: sh(
+                        script: 'git rev-parse --short HEAD',
+                        returnStdout: true
+                    ).trim()
+
+                    env.DEPLOYED_GIT_BRANCH = scmVars.GIT_BRANCH ?: ''
+
+                    if (!env.DEPLOYED_GIT_BRANCH?.trim()) {
+                        env.DEPLOYED_GIT_BRANCH = env.BRANCH_NAME ?: ''
+                    }
+
+                    if (!env.DEPLOYED_GIT_BRANCH?.trim()) {
+                        env.DEPLOYED_GIT_BRANCH = 'unknown'
+                    }
+
+                    env.DEPLOYED_GIT_BRANCH = env.DEPLOYED_GIT_BRANCH
+                        .replaceFirst(/^origin\//, '')
+                        .trim()
+
+                    echo "Checked out commit: ${env.DEPLOYED_GIT_COMMIT}"
+                    echo "Checked out branch: ${env.DEPLOYED_GIT_BRANCH}"
+                }
 
                 echo 'Source checkout completed'
             }
@@ -356,18 +381,9 @@ pipeline {
                     generated=$(date '+%Y-%m-%d %H:%M:%S')
                     build_number="${BUILD_NUMBER:-N/A}"
 
-                    git_commit=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+                    git_commit="${DEPLOYED_GIT_COMMIT:-$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")}"
 
-                    # Jenkins normally provides GIT_BRANCH after checkout.
-                    # Prefer that over git symbolic-ref because Jenkins
-                    # commonly checks out a detached commit.
-                    if [ -n "${GIT_BRANCH:-}" ]; then
-                        git_branch="${GIT_BRANCH}"
-                    elif [ -n "${BRANCH_NAME:-}" ]; then
-                        git_branch="${BRANCH_NAME}"
-                    else
-                        git_branch=$(git symbolic-ref --short -q HEAD 2>/dev/null || echo "detached")
-                    fi
+                    git_branch="${DEPLOYED_GIT_BRANCH:-unknown}"
 
                     git_branch=$(printf '%s' "$git_branch" | sed 's#^origin/##')
 
