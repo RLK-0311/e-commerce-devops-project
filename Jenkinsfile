@@ -80,9 +80,6 @@ pipeline {
         stage('Docker Services') {
             parallel {
 
-                // -------------------------------------------------
-                // BUILD LOCAL APPLICATION IMAGES
-                // -------------------------------------------------
                 stage('Build Application Images') {
                     steps {
                         sh '''
@@ -104,9 +101,6 @@ pipeline {
                 }
 
 
-                // -------------------------------------------------
-                // PULL EXTERNAL INFRASTRUCTURE IMAGES
-                // -------------------------------------------------
                 stage('Pull Infrastructure Images') {
                     steps {
                         sh '''
@@ -277,9 +271,6 @@ pipeline {
                         echo ""
 
 
-                        # -------------------------------------------------
-                        # SUCCESS
-                        # -------------------------------------------------
                         if [ "$failed" -eq 0 ] && [ "$starting" -eq 0 ]; then
 
                             echo "========================================="
@@ -291,9 +282,6 @@ pipeline {
                         fi
 
 
-                        # -------------------------------------------------
-                        # ACTUAL FAILURE
-                        # -------------------------------------------------
                         if [ "$failed" -eq 1 ] && [ "$starting" -eq 0 ]; then
 
                             echo "========================================="
@@ -305,9 +293,6 @@ pipeline {
                         fi
 
 
-                        # -------------------------------------------------
-                        # STILL STARTING
-                        # -------------------------------------------------
                         echo "Some services are still starting."
                         echo "Waiting 5 seconds before checking again..."
 
@@ -318,9 +303,6 @@ pipeline {
                     done
 
 
-                    # -----------------------------------------------------
-                    # TIMEOUT
-                    # -----------------------------------------------------
                     echo "========================================="
                     echo "Service verification timed out."
                     echo "========================================="
@@ -358,7 +340,7 @@ pipeline {
 
 
         // =========================================================
-        // GENERATE ARCHITECTURE DASHBOARD
+        // GENERATE VISUAL CI/CD DASHBOARD
         // =========================================================
         stage('Generate Architecture Dashboard') {
             steps {
@@ -371,23 +353,32 @@ pipeline {
 
                     mkdir -p dashboard
 
-
-                    # -------------------------------------------------
-                    # BUILD INFORMATION
-                    # -------------------------------------------------
                     generated=$(date '+%Y-%m-%d %H:%M:%S')
-
                     build_number="${BUILD_NUMBER:-N/A}"
 
                     git_commit=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 
-                    if [ -n "${BRANCH_NAME:-}" ]; then
+                    # Jenkins normally provides GIT_BRANCH after checkout.
+                    # Prefer that over git symbolic-ref because Jenkins
+                    # commonly checks out a detached commit.
+                    if [ -n "${GIT_BRANCH:-}" ]; then
+                        git_branch="${GIT_BRANCH}"
+                    elif [ -n "${BRANCH_NAME:-}" ]; then
                         git_branch="${BRANCH_NAME}"
                     else
                         git_branch=$(git symbolic-ref --short -q HEAD 2>/dev/null || echo "detached")
                     fi
 
+                    git_branch=$(printf '%s' "$git_branch" | sed 's#^origin/##')
 
+                    if [ -z "$git_branch" ]; then
+                        git_branch="unknown"
+                    fi
+
+
+                    # -------------------------------------------------
+                    # SERVICES
+                    # -------------------------------------------------
                     services="backend mysql redis kafka kafka-connect nginx prometheus grafana cadvisor"
 
 
@@ -402,11 +393,7 @@ pipeline {
 
 
                     # -------------------------------------------------
-                    # CREATE SERVICE CARDS FILE
-                    #
-                    # This is deliberately generated separately from
-                    # the HTML template so Bash never interprets the
-                    # HTML/CSS as shell commands.
+                    # SERVICE CARDS
                     # -------------------------------------------------
                     : > dashboard/service_cards.html
 
@@ -423,7 +410,7 @@ pipeline {
                             status="FAILED"
                             detail="Container not found"
                             status_class="failed"
-                            status_icon="&#10060;"
+                            status_icon="×"
                             container_name="N/A"
                             image_name="N/A"
 
@@ -461,7 +448,7 @@ pipeline {
                                 status="HEALTHY"
                                 detail="Running and healthy"
                                 status_class="healthy"
-                                status_icon="&#10003;"
+                                status_icon="✓"
 
                                 healthy_services=$((healthy_services + 1))
                                 running_services=$((running_services + 1))
@@ -472,7 +459,7 @@ pipeline {
                                 status="RUNNING"
                                 detail="Running without healthcheck"
                                 status_class="running"
-                                status_icon="&#9679;"
+                                status_icon="●"
 
                                 running_services=$((running_services + 1))
 
@@ -482,7 +469,7 @@ pipeline {
                                 status="STARTING"
                                 detail="Healthcheck still starting"
                                 status_class="starting"
-                                status_icon="&#9688;"
+                                status_icon="◐"
 
                                 starting_services=$((starting_services + 1))
                                 running_services=$((running_services + 1))
@@ -492,7 +479,7 @@ pipeline {
                                 status="FAILED"
                                 detail="State: $state | Health: $health"
                                 status_class="failed"
-                                status_icon="&#10060;"
+                                status_icon="×"
 
                                 failed_services=$((failed_services + 1))
 
@@ -501,27 +488,20 @@ pipeline {
                         fi
 
 
-                        # -------------------------------------------------
-                        # Append HTML safely to a separate file.
-                        # Quoted EOF prevents shell interpretation.
-                        # -------------------------------------------------
                         cat >> dashboard/service_cards.html <<EOF
 <div class="service-card ${status_class}">
-
-    <div class="service-header">
-
-        <div class="service-name">
-            ${service}
-        </div>
-
-        <div class="status-icon">
+    <div class="service-card-top">
+        <div class="service-pictogram ${status_class}">
             ${status_icon}
         </div>
 
-    </div>
+        <div class="service-card-name">
+            ${service}
+        </div>
 
-    <div class="service-status ${status_class}">
-        ${status}
+        <div class="service-status-pill ${status_class}">
+            ${status}
+        </div>
     </div>
 
     <div class="service-detail">
@@ -529,7 +509,6 @@ pipeline {
     </div>
 
     <div class="service-meta">
-
         <div>
             <span>Container</span>
             <strong>${container_name}</strong>
@@ -539,9 +518,7 @@ pipeline {
             <span>Image</span>
             <strong>${image_name}</strong>
         </div>
-
     </div>
-
 </div>
 EOF
 
@@ -549,51 +526,31 @@ EOF
 
 
                     # -------------------------------------------------
-                    # OVERALL DEPLOYMENT STATUS
+                    # DEPLOYMENT STATUS
                     # -------------------------------------------------
                     if [ "$failed_services" -eq 0 ]; then
-
                         deployment_status="HEALTHY"
                         deployment_class="healthy"
                         deployment_description="All required Docker services are running and verified."
-
                     else
-
                         deployment_status="DEGRADED"
                         deployment_class="failed"
                         deployment_description="One or more Docker services failed verification."
-
                     fi
 
 
                     # -------------------------------------------------
-                    # PIPELINE STATUS
-                    # -------------------------------------------------
-                    pipeline_status="SUCCESS"
-
-
-                    # -------------------------------------------------
-                    # GENERATE COMPLETE HTML
-                    #
-                    # IMPORTANT:
-                    # The HTML template is single-quoted heredoc.
-                    # Bash therefore does NOT interpret CSS, HTML,
-                    # JavaScript, ${...}, or special characters.
+                    # GENERATE HTML TEMPLATE
                     # -------------------------------------------------
                     cat > dashboard/index.template.html <<'HTML_TEMPLATE'
 <!DOCTYPE html>
-
 <html lang="en">
 
 <head>
-
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-<meta name="viewport"
-      content="width=device-width, initial-scale=1.0">
-
-<title>E-Commerce CI/CD Dashboard</title>
-
+<title>E-Commerce CI/CD Control Center</title>
 
 <style>
 
@@ -601,30 +558,22 @@ EOF
     box-sizing: border-box;
 }
 
-
 body {
     margin: 0;
-    padding: 0;
-
+    background: #eef2f7;
+    color: #17202a;
     font-family:
         -apple-system,
         BlinkMacSystemFont,
         "Segoe UI",
         Arial,
         sans-serif;
-
-    background: #f3f5f8;
-
-    color: #17202a;
 }
 
-
 .container {
-    max-width: 1400px;
-
-    margin: auto;
-
-    padding: 30px;
+    max-width: 1500px;
+    margin: 0 auto;
+    padding: 28px;
 }
 
 
@@ -632,314 +581,415 @@ body {
    HEADER
    ========================================================= */
 
-.header {
-    background: linear-gradient(
-        135deg,
-        #17202a,
-        #273746
-    );
-
+.hero {
+    position: relative;
+    overflow: hidden;
+    padding: 32px;
+    border-radius: 20px;
     color: white;
-
-    padding: 30px;
-
-    border-radius: 16px;
-
+    background:
+        linear-gradient(135deg, #101820 0%, #1f3448 55%, #253f55 100%);
+    box-shadow: 0 12px 35px rgba(16, 24, 32, .18);
     margin-bottom: 20px;
-
-    box-shadow:
-        0 8px 24px rgba(0,0,0,.12);
 }
 
+.hero:after {
+    content: "";
+    position: absolute;
+    width: 260px;
+    height: 260px;
+    border-radius: 50%;
+    right: -90px;
+    top: -100px;
+    border: 35px solid rgba(255,255,255,.05);
+}
 
-.header-top {
+.hero-content {
+    position: relative;
+    z-index: 2;
+}
+
+.hero-row {
     display: flex;
-
     justify-content: space-between;
-
     align-items: flex-start;
-
     gap: 20px;
 }
 
-
-.header h1 {
-    margin: 0 0 8px 0;
-
-    font-size: 30px;
+.eyebrow {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    color: #9fb3c8;
+    font-weight: 700;
+    margin-bottom: 8px;
 }
 
+.hero h1 {
+    margin: 0;
+    font-size: 34px;
+    line-height: 1.15;
+}
 
-.header-subtitle {
-    color: #ccd1d1;
-
+.hero-description {
+    margin-top: 10px;
+    color: #c8d3de;
     font-size: 14px;
 }
 
-
-.build-badge {
+.success-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 11px 17px;
+    border-radius: 30px;
     background: #1e8449;
-
-    padding: 10px 16px;
-
-    border-radius: 20px;
-
-    font-weight: bold;
-
+    font-size: 13px;
+    font-weight: 800;
     white-space: nowrap;
+}
+
+.success-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: #d5f5e3;
 }
 
 
 /* =========================================================
-   INFO CARDS
+   BUILD INFORMATION
    ========================================================= */
 
 .info-grid {
     display: grid;
-
-    grid-template-columns:
-        repeat(auto-fit, minmax(180px, 1fr));
-
-    gap: 15px;
-
+    grid-template-columns: repeat(4, 1fr);
+    gap: 14px;
     margin-bottom: 20px;
 }
 
-
 .info-card {
     background: white;
-
-    padding: 20px;
-
-    border-radius: 12px;
-
-    box-shadow:
-        0 3px 12px rgba(0,0,0,.07);
+    border: 1px solid #e1e7ed;
+    border-radius: 14px;
+    padding: 18px;
+    box-shadow: 0 4px 14px rgba(20, 30, 40, .05);
 }
-
 
 .info-label {
-    font-size: 11px;
-
-    color: #7b8794;
-
+    color: #82909d;
+    font-size: 10px;
     text-transform: uppercase;
-
-    letter-spacing: .8px;
-
-    margin-bottom: 8px;
+    letter-spacing: 1.2px;
+    font-weight: 800;
 }
 
-
 .info-value {
+    margin-top: 8px;
     font-size: 20px;
-
-    font-weight: 700;
-
+    font-weight: 800;
     word-break: break-word;
 }
 
-
-.info-small {
-    margin-top: 5px;
-
-    color: #7b8794;
-
-    font-size: 12px;
+.info-sub {
+    margin-top: 4px;
+    color: #8a969f;
+    font-size: 11px;
 }
 
 
 /* =========================================================
-   SECTION
+   SECTIONS
    ========================================================= */
 
 .section {
     background: white;
-
-    border-radius: 14px;
-
-    padding: 24px;
-
+    border: 1px solid #e1e7ed;
+    border-radius: 18px;
+    padding: 25px;
     margin-bottom: 20px;
-
-    box-shadow:
-        0 3px 12px rgba(0,0,0,.07);
+    box-shadow: 0 4px 14px rgba(20, 30, 40, .05);
 }
 
+.section-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 15px;
+    margin-bottom: 5px;
+}
 
 .section-title {
-    font-size: 20px;
-
-    font-weight: 700;
-
-    margin-bottom: 20px;
+    font-size: 21px;
+    font-weight: 800;
 }
-
 
 .section-subtitle {
-    color: #7b8794;
-
+    color: #82909d;
     font-size: 13px;
-
-    margin-top: -12px;
-
-    margin-bottom: 20px;
+    margin-bottom: 22px;
 }
 
 
 /* =========================================================
-   PIPELINE
+   CI/CD FLOW
    ========================================================= */
 
-.pipeline {
+.flow {
     display: flex;
-
-    align-items: center;
-
+    align-items: stretch;
     justify-content: center;
-
-    flex-wrap: wrap;
-
-    gap: 8px;
+    gap: 0;
 }
 
-
-.pipeline-stage {
-    min-width: 145px;
-
-    padding: 15px;
-
-    border-radius: 10px;
-
+.flow-node {
+    position: relative;
+    flex: 1;
+    max-width: 210px;
+    min-width: 150px;
     text-align: center;
-
-    border: 1px solid #d5d8dc;
-
-    background: #f8f9f9;
 }
 
-
-.pipeline-stage.completed {
-    border-color: #82e0aa;
-
-    background: #eafaf1;
+.flow-card {
+    height: 145px;
+    padding: 18px 12px;
+    border-radius: 16px;
+    border: 2px solid #a9dfbf;
+    background: #f1fbf5;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
 }
 
-
-.stage-number {
-    width: 28px;
-
-    height: 28px;
-
-    line-height: 28px;
-
-    margin: auto auto 8px auto;
-
+.flow-icon {
+    width: 46px;
+    height: 46px;
     border-radius: 50%;
-
+    display: flex;
+    align-items: center;
+    justify-content: center;
     background: #1e8449;
-
     color: white;
-
-    font-weight: bold;
+    font-size: 20px;
+    font-weight: 900;
+    margin-bottom: 10px;
 }
 
-
-.stage-name {
-    font-weight: bold;
-
+.flow-title {
     font-size: 14px;
+    font-weight: 800;
 }
 
-
-.stage-state {
+.flow-status {
     margin-top: 4px;
-
-    font-size: 11px;
-
     color: #1e8449;
-
+    font-size: 10px;
     text-transform: uppercase;
+    letter-spacing: .8px;
+    font-weight: 800;
 }
 
+.flow-arrow {
+    align-self: center;
+    width: 55px;
+    position: relative;
+    text-align: center;
+    color: #71808e;
+    font-size: 25px;
+    font-weight: 800;
+}
 
-.pipeline-arrow {
-    font-size: 24px;
+.flow-arrow:before {
+    content: "";
+    position: absolute;
+    left: 4px;
+    right: 4px;
+    top: 50%;
+    height: 2px;
+    background: #c9d2db;
+    z-index: 0;
+}
 
-    color: #85929e;
-
-    font-weight: bold;
+.flow-arrow span {
+    position: relative;
+    z-index: 1;
+    background: white;
+    padding: 0 3px;
 }
 
 
 /* =========================================================
-   ARCHITECTURE
+   ARCHITECTURE DIAGRAM
    ========================================================= */
 
-.architecture {
-    display: flex;
-
-    flex-direction: column;
-
-    gap: 12px;
+.architecture-canvas {
+    border-radius: 18px;
+    background: #f7f9fb;
+    border: 1px solid #e2e8ee;
+    padding: 24px;
+    overflow-x: auto;
 }
 
+.arch-flow {
+    min-width: 1000px;
+}
+
+.arch-source {
+    display: flex;
+    justify-content: center;
+    margin-bottom: 18px;
+}
+
+.arch-source-box {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 13px 22px;
+    border-radius: 14px;
+    background: #17202a;
+    color: white;
+    box-shadow: 0 6px 16px rgba(0,0,0,.12);
+}
+
+.arch-source-icon {
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    background: #273746;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 900;
+}
+
+.arch-source-title {
+    font-weight: 800;
+}
+
+.arch-source-sub {
+    color: #b8c4cf;
+    font-size: 11px;
+    margin-top: 2px;
+}
+
+.arch-down {
+    height: 28px;
+    width: 2px;
+    background: #aab7c4;
+    margin: 0 auto;
+}
+
+.jenkins-box {
+    width: 300px;
+    margin: 0 auto;
+    padding: 16px;
+    text-align: center;
+    border: 2px solid #a9cce3;
+    background: #eaf2f8;
+    border-radius: 15px;
+}
+
+.jenkins-title {
+    font-weight: 900;
+    color: #1b4f72;
+}
+
+.jenkins-sub {
+    color: #5d6d7e;
+    font-size: 11px;
+    margin-top: 3px;
+}
+
+.arch-layers {
+    display: grid;
+    grid-template-columns: 1fr 1.15fr 1fr;
+    gap: 16px;
+    margin-top: 20px;
+}
 
 .arch-layer {
-    border: 1px solid #e5e7e9;
-
-    border-radius: 12px;
-
     padding: 18px;
-
-    background: #fafbfc;
+    border-radius: 16px;
+    border: 1px solid #dfe6ec;
+    background: white;
 }
 
-
-.arch-title {
-    font-size: 12px;
-
+.layer-title {
+    font-size: 11px;
     text-transform: uppercase;
-
     letter-spacing: 1px;
-
-    color: #7b8794;
-
-    margin-bottom: 12px;
-
-    font-weight: bold;
+    color: #71808e;
+    font-weight: 900;
+    margin-bottom: 14px;
+    text-align: center;
 }
-
 
 .arch-nodes {
     display: flex;
-
-    flex-wrap: wrap;
-
+    flex-direction: column;
     gap: 10px;
 }
 
-
 .arch-node {
-    background: white;
-
-    border: 1px solid #ccd1d1;
-
-    padding: 12px 18px;
-
-    border-radius: 9px;
-
-    font-weight: 600;
-
-    box-shadow:
-        0 2px 5px rgba(0,0,0,.04);
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 11px;
+    border-radius: 11px;
+    border: 1px solid #dce4eb;
+    background: #f9fafb;
 }
 
-
-.arch-node.primary {
+.arch-node-icon {
+    width: 35px;
+    height: 35px;
+    flex-shrink: 0;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     background: #eaf2f8;
+    color: #1b4f72;
+    font-size: 12px;
+    font-weight: 900;
+}
 
-    border-color: #a9cce3;
+.arch-node-name {
+    font-weight: 800;
+    font-size: 13px;
+}
+
+.arch-node-desc {
+    margin-top: 2px;
+    color: #82909d;
+    font-size: 10px;
+}
+
+.arch-status {
+    margin-left: auto;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: #1e8449;
+}
+
+.arch-connector {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 12px 0;
+    color: #8493a1;
+    font-size: 12px;
+    font-weight: 800;
+}
+
+.arch-footer {
+    text-align: center;
+    margin-top: 18px;
+    color: #82909d;
+    font-size: 11px;
 }
 
 
@@ -947,57 +997,48 @@ body {
    DEPLOYMENT STATUS
    ========================================================= */
 
-.deployment-status {
+.deployment {
     display: flex;
-
     align-items: center;
-
-    gap: 15px;
-
-    padding: 18px;
-
-    border-radius: 10px;
-
+    gap: 18px;
+    padding: 20px;
+    border-radius: 15px;
     background: #eafaf1;
-
     border: 1px solid #a9dfbf;
 }
 
-
-.deployment-status.failed {
+.deployment.failed {
     background: #fdedec;
-
     border-color: #f1948a;
 }
 
-
-.deployment-dot {
-    width: 15px;
-
-    height: 15px;
-
+.deployment-icon {
+    width: 50px;
+    height: 50px;
+    flex-shrink: 0;
     border-radius: 50%;
-
     background: #1e8449;
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 22px;
+    font-weight: 900;
 }
 
-
-.deployment-status.failed .deployment-dot {
+.deployment.failed .deployment-icon {
     background: #c0392b;
 }
 
-
 .deployment-title {
-    font-weight: 800;
+    font-size: 17px;
+    font-weight: 900;
 }
 
-
 .deployment-description {
-    color: #626567;
-
+    color: #66737f;
     font-size: 12px;
-
-    margin-top: 3px;
+    margin-top: 4px;
 }
 
 
@@ -1007,39 +1048,26 @@ body {
 
 .summary-grid {
     display: grid;
-
-    grid-template-columns:
-        repeat(auto-fit, minmax(160px, 1fr));
-
+    grid-template-columns: repeat(4, 1fr);
     gap: 12px;
-
-    margin-bottom: 20px;
+    margin-bottom: 18px;
 }
-
 
 .summary-card {
     padding: 18px;
-
-    border-radius: 10px;
-
-    background: #f8f9f9;
-
-    border: 1px solid #e5e7e9;
+    border-radius: 14px;
+    background: #f8fafc;
+    border: 1px solid #e1e7ed;
 }
-
 
 .summary-number {
-    font-size: 28px;
-
-    font-weight: 800;
+    font-size: 29px;
+    font-weight: 900;
 }
 
-
 .summary-label {
-    font-size: 12px;
-
-    color: #7b8794;
-
+    color: #82909d;
+    font-size: 11px;
     margin-top: 3px;
 }
 
@@ -1050,152 +1078,193 @@ body {
 
 .service-grid {
     display: grid;
-
-    grid-template-columns:
-        repeat(auto-fit, minmax(280px, 1fr));
-
-    gap: 15px;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 14px;
 }
-
 
 .service-card {
-    background: white;
-
-    border: 1px solid #e5e7e9;
-
-    border-left: 5px solid #85929e;
-
-    border-radius: 12px;
-
     padding: 18px;
-
-    box-shadow:
-        0 2px 8px rgba(0,0,0,.05);
+    border-radius: 15px;
+    border: 1px solid #e1e7ed;
+    border-top: 4px solid #8493a1;
+    background: white;
 }
-
 
 .service-card.healthy {
-    border-left-color: #1e8449;
+    border-top-color: #1e8449;
 }
-
 
 .service-card.running {
-    border-left-color: #2471a3;
+    border-top-color: #2471a3;
 }
-
 
 .service-card.starting {
-    border-left-color: #b9770e;
+    border-top-color: #b9770e;
 }
-
 
 .service-card.failed {
-    border-left-color: #c0392b;
+    border-top-color: #c0392b;
 }
 
-
-.service-header {
+.service-card-top {
     display: flex;
-
-    justify-content: space-between;
-
     align-items: center;
+    gap: 10px;
 }
 
-
-.service-name {
-    font-size: 17px;
-
-    font-weight: 700;
+.service-pictogram {
+    width: 38px;
+    height: 38px;
+    border-radius: 11px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    font-weight: 900;
+    background: #f2f4f6;
 }
 
-
-.status-icon {
-    font-size: 22px;
-
-    font-weight: bold;
-}
-
-
-.service-status {
-    margin-top: 10px;
-
-    font-size: 12px;
-
-    font-weight: 800;
-
-    letter-spacing: .7px;
-}
-
-
-.service-status.healthy {
+.service-pictogram.healthy {
+    background: #eafaf1;
     color: #1e8449;
 }
 
-
-.service-status.running {
+.service-pictogram.running {
+    background: #eaf2f8;
     color: #2471a3;
 }
 
-
-.service-status.starting {
+.service-pictogram.starting {
+    background: #fef5e7;
     color: #b9770e;
 }
 
-
-.service-status.failed {
+.service-pictogram.failed {
+    background: #fdedec;
     color: #c0392b;
 }
 
+.service-card-name {
+    font-size: 15px;
+    font-weight: 900;
+    flex: 1;
+}
+
+.service-status-pill {
+    padding: 5px 8px;
+    border-radius: 20px;
+    font-size: 9px;
+    font-weight: 900;
+    letter-spacing: .5px;
+}
+
+.service-status-pill.healthy {
+    background: #eafaf1;
+    color: #1e8449;
+}
+
+.service-status-pill.running {
+    background: #eaf2f8;
+    color: #2471a3;
+}
+
+.service-status-pill.starting {
+    background: #fef5e7;
+    color: #b9770e;
+}
+
+.service-status-pill.failed {
+    background: #fdedec;
+    color: #c0392b;
+}
 
 .service-detail {
-    margin-top: 6px;
-
-    font-size: 12px;
-
-    color: #626567;
+    margin-top: 12px;
+    font-size: 11px;
+    color: #6c7a86;
 }
-
 
 .service-meta {
-    margin-top: 15px;
-
-    padding-top: 12px;
-
-    border-top: 1px solid #f0f1f1;
-
+    margin-top: 13px;
+    padding-top: 11px;
+    border-top: 1px solid #edf0f3;
     display: grid;
-
-    gap: 8px;
+    gap: 7px;
 }
-
 
 .service-meta div {
     display: flex;
-
     justify-content: space-between;
-
-    gap: 15px;
-
-    font-size: 11px;
+    gap: 12px;
 }
-
 
 .service-meta span {
-    color: #909497;
+    color: #9aa5ae;
+    font-size: 10px;
+}
+
+.service-meta strong {
+    max-width: 68%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-align: right;
+    font-size: 10px;
 }
 
 
-.service-meta strong {
-    max-width: 65%;
+/* =========================================================
+   BUILD ACTIVITY
+   ========================================================= */
 
-    text-align: right;
+.timeline {
+    position: relative;
+    margin-left: 10px;
+    padding-left: 30px;
+    border-left: 2px solid #dce3e9;
+}
 
-    overflow: hidden;
+.timeline-item {
+    position: relative;
+    padding: 0 0 22px 12px;
+}
 
-    text-overflow: ellipsis;
+.timeline-item:last-child {
+    padding-bottom: 0;
+}
 
-    white-space: nowrap;
+.timeline-dot {
+    position: absolute;
+    left: -40px;
+    top: 1px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: #1e8449;
+    border: 3px solid white;
+    box-shadow: 0 0 0 2px #a9dfbf;
+}
+
+.timeline-title {
+    font-size: 13px;
+    font-weight: 900;
+}
+
+.timeline-description {
+    color: #74818c;
+    font-size: 11px;
+    margin-top: 3px;
+}
+
+.timeline-code {
+    display: inline-block;
+    margin-top: 5px;
+    padding: 4px 7px;
+    border-radius: 5px;
+    background: #f1f3f5;
+    color: #566573;
+    font-family: monospace;
+    font-size: 10px;
 }
 
 
@@ -1205,12 +1274,9 @@ body {
 
 .footer {
     text-align: center;
-
-    color: #909497;
-
-    font-size: 12px;
-
-    padding: 15px;
+    padding: 18px;
+    color: #8a969f;
+    font-size: 11px;
 }
 
 
@@ -1218,68 +1284,102 @@ body {
    RESPONSIVE
    ========================================================= */
 
+@media (max-width: 1100px) {
+
+    .info-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    .summary-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    .service-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    .arch-layers {
+        grid-template-columns: 1fr;
+    }
+}
+
 @media (max-width: 800px) {
 
     .container {
-        padding: 15px;
+        padding: 14px;
     }
 
-
-    .header-top {
+    .hero-row {
         flex-direction: column;
     }
 
+    .flow {
+        flex-direction: column;
+        align-items: center;
+    }
 
-    .pipeline-arrow {
+    .flow-node {
+        width: 100%;
+        max-width: 350px;
+    }
+
+    .flow-arrow {
+        height: 35px;
+        width: 35px;
         transform: rotate(90deg);
     }
 
-
-    .pipeline {
-        flex-direction: column;
+    .info-grid,
+    .summary-grid,
+    .service-grid {
+        grid-template-columns: 1fr;
     }
-
-
-    .pipeline-stage {
-        width: 100%;
-    }
-
 }
 
 </style>
-
 </head>
 
 
 <body>
 
-
 <div class="container">
 
 
 <!-- =========================================================
-     HEADER
+     HERO
      ========================================================= -->
 
-<div class="header">
+<div class="hero">
 
-    <div class="header-top">
+    <div class="hero-content">
 
-        <div>
+        <div class="hero-row">
 
-            <h1>
-                E-Commerce CI/CD Dashboard
-            </h1>
+            <div>
 
-            <div class="header-subtitle">
-                Jenkins → Docker Build → Deployment → Service Verification
+                <div class="eyebrow">
+                    E-Commerce DevOps Project
+                </div>
+
+                <h1>
+                    CI/CD Control Center
+                </h1>
+
+                <div class="hero-description">
+                    Jenkins → Docker Build → Deployment → Service Verification
+                </div>
+
             </div>
 
-        </div>
 
+            <div class="success-badge">
 
-        <div class="build-badge">
-            BUILD #__BUILD_NUMBER__
+                <span class="success-dot"></span>
+
+                BUILD #__BUILD_NUMBER__ • SUCCESS
+
+            </div>
+
         </div>
 
     </div>
@@ -1293,36 +1393,18 @@ body {
 
 <div class="info-grid">
 
-
     <div class="info-card">
 
         <div class="info-label">
-            Pipeline
+            Git Commit
         </div>
 
         <div class="info-value">
-            Jenkins
+            __GIT_COMMIT__
         </div>
 
-        <div class="info-small">
-            CI/CD Automation
-        </div>
-
-    </div>
-
-
-    <div class="info-card">
-
-        <div class="info-label">
-            Build
-        </div>
-
-        <div class="info-value">
-            #__BUILD_NUMBER__
-        </div>
-
-        <div class="info-small">
-            __GENERATED__
+        <div class="info-sub">
+            Source revision deployed by this build
         </div>
 
     </div>
@@ -1338,8 +1420,8 @@ body {
             __GIT_BRANCH__
         </div>
 
-        <div class="info-small">
-            Commit __GIT_COMMIT__
+        <div class="info-sub">
+            Jenkins checkout source
         </div>
 
     </div>
@@ -1348,145 +1430,207 @@ body {
     <div class="info-card">
 
         <div class="info-label">
-            Container Platform
+            Build
+        </div>
+
+        <div class="info-value">
+            #__BUILD_NUMBER__
+        </div>
+
+        <div class="info-sub">
+            Jenkins pipeline execution
+        </div>
+
+    </div>
+
+
+    <div class="info-card">
+
+        <div class="info-label">
+            Platform
         </div>
 
         <div class="info-value">
             Docker Compose
         </div>
 
-        <div class="info-small">
-            __TOTAL_SERVICES__ services
+        <div class="info-sub">
+            __TOTAL_SERVICES__ services deployed
         </div>
 
     </div>
-
 
 </div>
 
 
 <!-- =========================================================
-     CI/CD PIPELINE
+     CI/CD FLOW
      ========================================================= -->
 
 <div class="section">
 
-    <div class="section-title">
-        CI/CD Pipeline
+    <div class="section-heading">
+        <div class="section-title">
+            CI/CD Pipeline Flow
+        </div>
     </div>
 
     <div class="section-subtitle">
-        Jenkins pipeline execution flow
+        What happened to the committed code during this Jenkins build
     </div>
 
 
-    <div class="pipeline">
+    <div class="flow">
 
+        <div class="flow-node">
 
-        <div class="pipeline-stage completed">
+            <div class="flow-card">
 
-            <div class="stage-number">
-                1
-            </div>
+                <div class="flow-icon">
+                    G
+                </div>
 
-            <div class="stage-name">
-                Checkout
-            </div>
+                <div class="flow-title">
+                    GitHub
+                </div>
 
-            <div class="stage-state">
-                Completed
-            </div>
+                <div class="flow-status">
+                    COMMIT __GIT_COMMIT__
+                </div>
 
-        </div>
-
-
-        <div class="pipeline-arrow">
-            →
-        </div>
-
-
-        <div class="pipeline-stage completed">
-
-            <div class="stage-number">
-                2
-            </div>
-
-            <div class="stage-name">
-                Validate
-            </div>
-
-            <div class="stage-state">
-                Completed
             </div>
 
         </div>
 
 
-        <div class="pipeline-arrow">
-            →
+        <div class="flow-arrow">
+            <span>→</span>
         </div>
 
 
-        <div class="pipeline-stage completed">
+        <div class="flow-node">
 
-            <div class="stage-number">
-                3
-            </div>
+            <div class="flow-card">
 
-            <div class="stage-name">
-                Build
-            </div>
+                <div class="flow-icon">
+                    J
+                </div>
 
-            <div class="stage-state">
-                Completed
-            </div>
+                <div class="flow-title">
+                    Jenkins
+                </div>
 
-        </div>
+                <div class="flow-status">
+                    BUILD #__BUILD_NUMBER__
+                </div>
 
-
-        <div class="pipeline-arrow">
-            →
-        </div>
-
-
-        <div class="pipeline-stage completed">
-
-            <div class="stage-number">
-                4
-            </div>
-
-            <div class="stage-name">
-                Deploy
-            </div>
-
-            <div class="stage-state">
-                Completed
             </div>
 
         </div>
 
 
-        <div class="pipeline-arrow">
-            →
+        <div class="flow-arrow">
+            <span>→</span>
         </div>
 
 
-        <div class="pipeline-stage completed">
+        <div class="flow-node">
 
-            <div class="stage-number">
-                5
-            </div>
+            <div class="flow-card">
 
-            <div class="stage-name">
-                Verify
-            </div>
+                <div class="flow-icon">
+                    ✓
+                </div>
 
-            <div class="stage-state">
-                Completed
+                <div class="flow-title">
+                    Validate
+                </div>
+
+                <div class="flow-status">
+                    COMPLETED
+                </div>
+
             </div>
 
         </div>
 
+
+        <div class="flow-arrow">
+            <span>→</span>
+        </div>
+
+
+        <div class="flow-node">
+
+            <div class="flow-card">
+
+                <div class="flow-icon">
+                    B
+                </div>
+
+                <div class="flow-title">
+                    Docker Build
+                </div>
+
+                <div class="flow-status">
+                    COMPLETED
+                </div>
+
+            </div>
+
+        </div>
+
+
+        <div class="flow-arrow">
+            <span>→</span>
+        </div>
+
+
+        <div class="flow-node">
+
+            <div class="flow-card">
+
+                <div class="flow-icon">
+                    D
+                </div>
+
+                <div class="flow-title">
+                    Deploy
+                </div>
+
+                <div class="flow-status">
+                    COMPLETED
+                </div>
+
+            </div>
+
+        </div>
+
+
+        <div class="flow-arrow">
+            <span>→</span>
+        </div>
+
+
+        <div class="flow-node">
+
+            <div class="flow-card">
+
+                <div class="flow-icon">
+                    ✓
+                </div>
+
+                <div class="flow-title">
+                    Verify
+                </div>
+
+                <div class="flow-status">
+                    __RUNNING_SERVICES__/__TOTAL_SERVICES__ RUNNING
+                </div>
+
+            </div>
+
+        </div>
 
     </div>
 
@@ -1499,126 +1643,294 @@ body {
 
 <div class="section">
 
-    <div class="section-title">
-        E-Commerce Architecture
+    <div class="section-heading">
+        <div class="section-title">
+            E-Commerce Architecture
+        </div>
     </div>
 
     <div class="section-subtitle">
-        Application and infrastructure topology
+        Visual topology of the application, data, messaging and observability layers
     </div>
 
 
-    <div class="architecture">
+    <div class="architecture-canvas">
+
+        <div class="arch-flow">
 
 
-        <div class="arch-layer">
+            <!-- SOURCE -->
 
-            <div class="arch-title">
-                Source Control
-            </div>
+            <div class="arch-source">
 
-            <div class="arch-nodes">
+                <div class="arch-source-box">
 
-                <div class="arch-node primary">
-                    GitHub
+                    <div class="arch-source-icon">
+                        G
+                    </div>
+
+                    <div>
+
+                        <div class="arch-source-title">
+                            GitHub
+                        </div>
+
+                        <div class="arch-source-sub">
+                            Commit __GIT_COMMIT__
+                        </div>
+
+                    </div>
+
                 </div>
 
+            </div>
+
+
+            <div class="arch-down"></div>
+
+
+            <!-- JENKINS -->
+
+            <div class="jenkins-box">
+
+                <div class="jenkins-title">
+                    Jenkins CI/CD
+                </div>
+
+                <div class="jenkins-sub">
+                    Build #__BUILD_NUMBER__ → Docker Compose Deployment
+                </div>
+
+            </div>
+
+
+            <div class="arch-down"></div>
+
+
+            <!-- THREE LAYERS -->
+
+            <div class="arch-layers">
+
+
+                <!-- APPLICATION -->
+
+                <div class="arch-layer">
+
+                    <div class="layer-title">
+                        Application Layer
+                    </div>
+
+                    <div class="arch-nodes">
+
+                        <div class="arch-node">
+
+                            <div class="arch-node-icon">
+                                NG
+                            </div>
+
+                            <div>
+                                <div class="arch-node-name">Nginx</div>
+                                <div class="arch-node-desc">Reverse Proxy</div>
+                            </div>
+
+                            <div class="arch-status"></div>
+
+                        </div>
+
+
+                        <div class="arch-connector">
+                            ↓ HTTP
+                        </div>
+
+
+                        <div class="arch-node">
+
+                            <div class="arch-node-icon">
+                                API
+                            </div>
+
+                            <div>
+                                <div class="arch-node-name">Node / Express</div>
+                                <div class="arch-node-desc">Backend API</div>
+                            </div>
+
+                            <div class="arch-status"></div>
+
+                        </div>
+
+
+                        <div class="arch-connector">
+                            ↓
+                        </div>
+
+
+                        <div class="arch-node">
+
+                            <div class="arch-node-icon">
+                                UI
+                            </div>
+
+                            <div>
+                                <div class="arch-node-name">React</div>
+                                <div class="arch-node-desc">Frontend</div>
+                            </div>
+
+                            <div class="arch-status"></div>
+
+                        </div>
+
+                    </div>
+
+                </div>
+
+
+                <!-- DATA -->
+
+                <div class="arch-layer">
+
+                    <div class="layer-title">
+                        Data & Messaging
+                    </div>
+
+                    <div class="arch-nodes">
+
+                        <div class="arch-node">
+
+                            <div class="arch-node-icon">
+                                DB
+                            </div>
+
+                            <div>
+                                <div class="arch-node-name">MySQL</div>
+                                <div class="arch-node-desc">Application Database</div>
+                            </div>
+
+                            <div class="arch-status"></div>
+
+                        </div>
+
+
+                        <div class="arch-node">
+
+                            <div class="arch-node-icon">
+                                R
+                            </div>
+
+                            <div>
+                                <div class="arch-node-name">Redis</div>
+                                <div class="arch-node-desc">Cache Layer</div>
+                            </div>
+
+                            <div class="arch-status"></div>
+
+                        </div>
+
+
+                        <div class="arch-node">
+
+                            <div class="arch-node-icon">
+                                K
+                            </div>
+
+                            <div>
+                                <div class="arch-node-name">Kafka</div>
+                                <div class="arch-node-desc">Event Streaming</div>
+                            </div>
+
+                            <div class="arch-status"></div>
+
+                        </div>
+
+
+                        <div class="arch-node">
+
+                            <div class="arch-node-icon">
+                                DC
+                            </div>
+
+                            <div>
+                                <div class="arch-node-name">Kafka Connect</div>
+                                <div class="arch-node-desc">Debezium Integration</div>
+                            </div>
+
+                            <div class="arch-status"></div>
+
+                        </div>
+
+                    </div>
+
+                </div>
+
+
+                <!-- OBSERVABILITY -->
+
+                <div class="arch-layer">
+
+                    <div class="layer-title">
+                        Observability
+                    </div>
+
+                    <div class="arch-nodes">
+
+                        <div class="arch-node">
+
+                            <div class="arch-node-icon">
+                                P
+                            </div>
+
+                            <div>
+                                <div class="arch-node-name">Prometheus</div>
+                                <div class="arch-node-desc">Metrics Collection</div>
+                            </div>
+
+                            <div class="arch-status"></div>
+
+                        </div>
+
+
+                        <div class="arch-node">
+
+                            <div class="arch-node-icon">
+                                G
+                            </div>
+
+                            <div>
+                                <div class="arch-node-name">Grafana</div>
+                                <div class="arch-node-desc">Monitoring Dashboard</div>
+                            </div>
+
+                            <div class="arch-status"></div>
+
+                        </div>
+
+
+                        <div class="arch-node">
+
+                            <div class="arch-node-icon">
+                                CA
+                            </div>
+
+                            <div>
+                                <div class="arch-node-name">cAdvisor</div>
+                                <div class="arch-node-desc">Container Metrics</div>
+                            </div>
+
+                            <div class="arch-status"></div>
+
+                        </div>
+
+                    </div>
+
+                </div>
+
+            </div>
+
+
+            <div class="arch-footer">
+                All components above are deployed and managed through Docker Compose.
             </div>
 
         </div>
-
-
-        <div class="arch-layer">
-
-            <div class="arch-title">
-                Frontend
-            </div>
-
-            <div class="arch-nodes">
-
-                <div class="arch-node primary">
-                    React
-                </div>
-
-            </div>
-
-        </div>
-
-
-        <div class="arch-layer">
-
-            <div class="arch-title">
-                Application Layer
-            </div>
-
-            <div class="arch-nodes">
-
-                <div class="arch-node">
-                    Nginx
-                </div>
-
-                <div class="arch-node">
-                    Node / Express Backend
-                </div>
-
-            </div>
-
-        </div>
-
-
-        <div class="arch-layer">
-
-            <div class="arch-title">
-                Data &amp; Messaging
-            </div>
-
-            <div class="arch-nodes">
-
-                <div class="arch-node">
-                    MySQL
-                </div>
-
-                <div class="arch-node">
-                    Redis
-                </div>
-
-                <div class="arch-node">
-                    Kafka
-                </div>
-
-                <div class="arch-node">
-                    Kafka Connect
-                </div>
-
-            </div>
-
-        </div>
-
-
-        <div class="arch-layer">
-
-            <div class="arch-title">
-                Observability
-            </div>
-
-            <div class="arch-nodes">
-
-                <div class="arch-node">
-                    Prometheus
-                </div>
-
-                <div class="arch-node">
-                    Grafana
-                </div>
-
-                <div class="arch-node">
-                    cAdvisor
-                </div>
-
-            </div>
-
-        </div>
-
 
     </div>
 
@@ -1631,14 +1943,17 @@ body {
 
 <div class="section">
 
-    <div class="section-title">
-        Deployment Status
+    <div class="section-heading">
+        <div class="section-title">
+            Deployment Status
+        </div>
     </div>
 
+    <div class="deployment __DEPLOYMENT_CLASS__">
 
-    <div class="deployment-status __DEPLOYMENT_CLASS__">
-
-        <div class="deployment-dot"></div>
+        <div class="deployment-icon">
+            ✓
+        </div>
 
         <div>
 
@@ -1658,83 +1973,62 @@ body {
 
 
 <!-- =========================================================
-     SERVICE SUMMARY
+     SERVICE HEALTH
      ========================================================= -->
 
 <div class="section">
 
-    <div class="section-title">
-        Service Health Summary
+    <div class="section-heading">
+        <div class="section-title">
+            Service Health
+        </div>
+    </div>
+
+    <div class="section-subtitle">
+        Live Docker Compose state captured after deployment verification
     </div>
 
 
     <div class="summary-grid">
 
-
         <div class="summary-card">
-
             <div class="summary-number">
                 __TOTAL_SERVICES__
             </div>
-
             <div class="summary-label">
                 Total Services
             </div>
-
         </div>
 
 
         <div class="summary-card">
-
             <div class="summary-number">
                 __HEALTHY_SERVICES__
             </div>
-
             <div class="summary-label">
-                Healthy
+                Healthchecks Passing
             </div>
-
         </div>
 
 
         <div class="summary-card">
-
             <div class="summary-number">
                 __RUNNING_SERVICES__
             </div>
-
             <div class="summary-label">
                 Running
             </div>
-
         </div>
 
 
         <div class="summary-card">
-
-            <div class="summary-number">
-                __STARTING_SERVICES__
-            </div>
-
-            <div class="summary-label">
-                Starting
-            </div>
-
-        </div>
-
-
-        <div class="summary-card">
-
             <div class="summary-number">
                 __FAILED_SERVICES__
             </div>
-
             <div class="summary-label">
                 Failed
             </div>
-
         </div>
-
 
     </div>
 
@@ -1749,32 +2043,183 @@ __SERVICE_CARDS__
 
 
 <!-- =========================================================
-     FOOTER
+     BUILD ACTIVITY
      ========================================================= -->
+
+<div class="section">
+
+    <div class="section-heading">
+        <div class="section-title">
+            Build Activity
+        </div>
+    </div>
+
+    <div class="section-subtitle">
+        Build #__BUILD_NUMBER__ execution summary
+    </div>
+
+
+    <div class="timeline">
+
+
+        <div class="timeline-item">
+
+            <div class="timeline-dot"></div>
+
+            <div class="timeline-title">
+                01 · Source Checkout
+            </div>
+
+            <div class="timeline-description">
+                Jenkins checked out the source revision used for this deployment.
+            </div>
+
+            <div class="timeline-code">
+                Commit __GIT_COMMIT__
+            </div>
+
+        </div>
+
+
+        <div class="timeline-item">
+
+            <div class="timeline-dot"></div>
+
+            <div class="timeline-title">
+                02 · Project Validation
+            </div>
+
+            <div class="timeline-description">
+                Project files and Docker Compose configuration were validated successfully.
+            </div>
+
+            <div class="timeline-code">
+                docker compose config --quiet
+            </div>
+
+        </div>
+
+
+        <div class="timeline-item">
+
+            <div class="timeline-dot"></div>
+
+            <div class="timeline-title">
+                03 · Docker Image Build
+            </div>
+
+            <div class="timeline-description">
+                Backend, Nginx and Prometheus application-owned images were built.
+            </div>
+
+            <div class="timeline-code">
+                docker compose build
+            </div>
+
+        </div>
+
+
+        <div class="timeline-item">
+
+            <div class="timeline-dot"></div>
+
+            <div class="timeline-title">
+                04 · Infrastructure Images
+            </div>
+
+            <div class="timeline-description">
+                MySQL, Redis, Kafka, Kafka Connect, Grafana and cAdvisor images were pulled.
+            </div>
+
+            <div class="timeline-code">
+                docker compose pull
+            </div>
+
+        </div>
+
+
+        <div class="timeline-item">
+
+            <div class="timeline-dot"></div>
+
+            <div class="timeline-title">
+                05 · Deployment
+            </div>
+
+            <div class="timeline-description">
+                Docker Compose started or updated the E-Commerce platform services.
+            </div>
+
+            <div class="timeline-code">
+                docker compose up -d
+            </div>
+
+        </div>
+
+
+        <div class="timeline-item">
+
+            <div class="timeline-dot"></div>
+
+            <div class="timeline-title">
+                06 · Service Verification
+            </div>
+
+            <div class="timeline-description">
+                Jenkins verified Docker container state and healthcheck results.
+            </div>
+
+            <div class="timeline-code">
+                __RUNNING_SERVICES__/__TOTAL_SERVICES__ running
+            </div>
+
+        </div>
+
+
+        <div class="timeline-item">
+
+            <div class="timeline-dot"></div>
+
+            <div class="timeline-title">
+                07 · Deployment Confirmed
+            </div>
+
+            <div class="timeline-description">
+                The deployment completed successfully and the dashboard was generated automatically.
+            </div>
+
+            <div class="timeline-code">
+                __DEPLOYMENT_STATUS__
+            </div>
+
+        </div>
+
+
+    </div>
+
+</div>
+
 
 <div class="footer">
 
-    Generated automatically by Jenkins •
-    E-Commerce DevOps Project •
-    __GENERATED__
+    Generated automatically by Jenkins
+    • E-Commerce DevOps Project
+    • Build #__BUILD_NUMBER__
+    • __GENERATED__
 
 </div>
 
 
 </div>
-
 
 </body>
-
 </html>
 HTML_TEMPLATE
 
 
                     # -------------------------------------------------
-                    # INJECT DYNAMIC VALUES
+                    # INJECT SCALAR VALUES
                     # -------------------------------------------------
-                    service_cards=$(cat dashboard/service_cards.html)
-
                     sed \
                         -e "s|__BUILD_NUMBER__|${build_number}|g" \
                         -e "s|__GENERATED__|${generated}|g" \
@@ -1788,40 +2233,54 @@ HTML_TEMPLATE
                         -e "s|__DEPLOYMENT_CLASS__|${deployment_class}|g" \
                         -e "s|__DEPLOYMENT_STATUS__|${deployment_status}|g" \
                         -e "s|__DEPLOYMENT_DESCRIPTION__|${deployment_description}|g" \
-                        dashboard/index.template.html > dashboard/index.html
+                        dashboard/index.template.html \
+                        > dashboard/index.html
 
 
                     # -------------------------------------------------
                     # INSERT SERVICE CARDS
+                    #
+                    # Do NOT pass multiline HTML through awk -v.
+                    # awk reads the service_cards file directly.
                     # -------------------------------------------------
-                    awk -v cards="$service_cards" '
-                        {
-                            if ($0 == "__SERVICE_CARDS__") {
-                                printf "%s\\n", cards
-                            } else {
-                                print
-                            }
+                    awk '
+                        FILENAME == ARGV[1] {
+                            cards = cards $0 ORS
+                            next
                         }
-                    ' dashboard/index.html > dashboard/index.final.html
+
+                        $0 == "__SERVICE_CARDS__" {
+                            printf "%s", cards
+                            next
+                        }
+
+                        {
+                            print
+                        }
+                    ' dashboard/service_cards.html dashboard/index.html \
+                        > dashboard/index.final.html
 
 
                     mv dashboard/index.final.html dashboard/index.html
 
 
                     # -------------------------------------------------
-                    # CLEAN TEMPLATE FILE
+                    # CLEAN TEMPORARY FILES
                     # -------------------------------------------------
                     rm -f dashboard/index.template.html
                     rm -f dashboard/service_cards.html
 
 
                     # -------------------------------------------------
-                    # VALIDATE GENERATED HTML
+                    # VALIDATE DASHBOARD
                     # -------------------------------------------------
                     test -s dashboard/index.html
 
-                    grep -q "E-Commerce CI/CD Dashboard" dashboard/index.html
-                    grep -q "Service Health Summary" dashboard/index.html
+                    grep -q "CI/CD Control Center" dashboard/index.html
+                    grep -q "CI/CD Pipeline Flow" dashboard/index.html
+                    grep -q "E-Commerce Architecture" dashboard/index.html
+                    grep -q "Service Health" dashboard/index.html
+                    grep -q "Build Activity" dashboard/index.html
                     grep -q "backend" dashboard/index.html
                     grep -q "mysql" dashboard/index.html
                     grep -q "grafana" dashboard/index.html
