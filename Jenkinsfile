@@ -358,7 +358,7 @@ pipeline {
 
 
         // =========================================================
-        // GENERATE IMPROVED ARCHITECTURE DASHBOARD
+        // GENERATE ARCHITECTURE DASHBOARD
         // =========================================================
         stage('Generate Architecture Dashboard') {
             steps {
@@ -379,17 +379,20 @@ pipeline {
 
                     build_number="${BUILD_NUMBER:-N/A}"
 
-                    build_status="SUCCESS"
-
                     git_commit=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 
-                    git_branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+                    if [ -n "${BRANCH_NAME:-}" ]; then
+                        git_branch="${BRANCH_NAME}"
+                    else
+                        git_branch=$(git symbolic-ref --short -q HEAD 2>/dev/null || echo "detached")
+                    fi
+
 
                     services="backend mysql redis kafka kafka-connect nginx prometheus grafana cadvisor"
 
 
                     # -------------------------------------------------
-                    # COLLECT LIVE DOCKER SERVICE STATUS
+                    # SERVICE COUNTERS
                     # -------------------------------------------------
                     total_services=0
                     healthy_services=0
@@ -397,7 +400,15 @@ pipeline {
                     starting_services=0
                     failed_services=0
 
-                    html_cards=""
+
+                    # -------------------------------------------------
+                    # CREATE SERVICE CARDS FILE
+                    #
+                    # This is deliberately generated separately from
+                    # the HTML template so Bash never interprets the
+                    # HTML/CSS as shell commands.
+                    # -------------------------------------------------
+                    : > dashboard/service_cards.html
 
 
                     for service in $services; do
@@ -412,7 +423,9 @@ pipeline {
                             status="FAILED"
                             detail="Container not found"
                             status_class="failed"
-                            status_icon="✕"
+                            status_icon="&#10060;"
+                            container_name="N/A"
+                            image_name="N/A"
 
                             failed_services=$((failed_services + 1))
 
@@ -448,7 +461,7 @@ pipeline {
                                 status="HEALTHY"
                                 detail="Running and healthy"
                                 status_class="healthy"
-                                status_icon="✓"
+                                status_icon="&#10003;"
 
                                 healthy_services=$((healthy_services + 1))
                                 running_services=$((running_services + 1))
@@ -459,7 +472,7 @@ pipeline {
                                 status="RUNNING"
                                 detail="Running without healthcheck"
                                 status_class="running"
-                                status_icon="●"
+                                status_icon="&#9679;"
 
                                 running_services=$((running_services + 1))
 
@@ -469,7 +482,7 @@ pipeline {
                                 status="STARTING"
                                 detail="Healthcheck still starting"
                                 status_class="starting"
-                                status_icon="◐"
+                                status_icon="&#9688;"
 
                                 starting_services=$((starting_services + 1))
                                 running_services=$((running_services + 1))
@@ -479,51 +492,58 @@ pipeline {
                                 status="FAILED"
                                 detail="State: $state | Health: $health"
                                 status_class="failed"
-                                status_icon="✕"
+                                status_icon="&#10060;"
 
                                 failed_services=$((failed_services + 1))
 
                             fi
 
-
-                            html_cards="${html_cards}
-                            <div class=\"service-card ${status_class}\">
-
-                                <div class=\"service-header\">
-
-                                    <div class=\"service-name\">
-                                        ${service}
-                                    </div>
-
-                                    <div class=\"status-icon\">
-                                        ${status_icon}
-                                    </div>
-
-                                </div>
-
-                                <div class=\"service-status ${status_class}\">
-                                    ${status}
-                                </div>
-
-                                <div class=\"service-detail\">
-                                    ${detail}
-                                </div>
-
-                                <div class=\"service-meta\">
-                                    <div>
-                                        <span>Container</span>
-                                        <strong>${container_name}</strong>
-                                    </div>
-
-                                    <div>
-                                        <span>Image</span>
-                                        <strong>${image_name}</strong>
-                                    </div>
-                                </div>
-
-                            </div>"
-
                         fi
+
+
+                        # -------------------------------------------------
+                        # Append HTML safely to a separate file.
+                        # Quoted EOF prevents shell interpretation.
+                        # -------------------------------------------------
+                        cat >> dashboard/service_cards.html <<EOF
+<div class="service-card ${status_class}">
+
+    <div class="service-header">
+
+        <div class="service-name">
+            ${service}
+        </div>
+
+        <div class="status-icon">
+            ${status_icon}
+        </div>
+
+    </div>
+
+    <div class="service-status ${status_class}">
+        ${status}
+    </div>
+
+    <div class="service-detail">
+        ${detail}
+    </div>
+
+    <div class="service-meta">
+
+        <div>
+            <span>Container</span>
+            <strong>${container_name}</strong>
+        </div>
+
+        <div>
+            <span>Image</span>
+            <strong>${image_name}</strong>
+        </div>
+
+    </div>
+
+</div>
+EOF
 
                     done
 
@@ -532,62 +552,35 @@ pipeline {
                     # OVERALL DEPLOYMENT STATUS
                     # -------------------------------------------------
                     if [ "$failed_services" -eq 0 ]; then
+
                         deployment_status="HEALTHY"
                         deployment_class="healthy"
+                        deployment_description="All required Docker services are running and verified."
+
                     else
+
                         deployment_status="DEGRADED"
                         deployment_class="failed"
+                        deployment_description="One or more Docker services failed verification."
+
                     fi
 
 
                     # -------------------------------------------------
-                    # PIPELINE STAGE DATA
+                    # PIPELINE STATUS
                     # -------------------------------------------------
-                    pipeline_stages='
-                    <div class="pipeline-stage completed">
-                        <div class="stage-number">1</div>
-                        <div class="stage-name">Checkout</div>
-                        <div class="stage-state">Completed</div>
-                    </div>
-
-                    <div class="pipeline-arrow">→</div>
-
-                    <div class="pipeline-stage completed">
-                        <div class="stage-number">2</div>
-                        <div class="stage-name">Validate</div>
-                        <div class="stage-state">Completed</div>
-                    </div>
-
-                    <div class="pipeline-arrow">→</div>
-
-                    <div class="pipeline-stage completed">
-                        <div class="stage-number">3</div>
-                        <div class="stage-name">Build</div>
-                        <div class="stage-state">Completed</div>
-                    </div>
-
-                    <div class="pipeline-arrow">→</div>
-
-                    <div class="pipeline-stage completed">
-                        <div class="stage-number">4</div>
-                        <div class="stage-name">Deploy</div>
-                        <div class="stage-state">Completed</div>
-                    </div>
-
-                    <div class="pipeline-arrow">→</div>
-
-                    <div class="pipeline-stage completed">
-                        <div class="stage-number">5</div>
-                        <div class="stage-name">Verify</div>
-                        <div class="stage-state">Completed</div>
-                    </div>
-                    '
+                    pipeline_status="SUCCESS"
 
 
                     # -------------------------------------------------
-                    # GENERATE DASHBOARD
+                    # GENERATE COMPLETE HTML
+                    #
+                    # IMPORTANT:
+                    # The HTML template is single-quoted heredoc.
+                    # Bash therefore does NOT interpret CSS, HTML,
+                    # JavaScript, ${...}, or special characters.
                     # -------------------------------------------------
-                    cat > dashboard/index.html <<EOF
+                    cat > dashboard/index.template.html <<'HTML_TEMPLATE'
 <!DOCTYPE html>
 
 <html lang="en">
@@ -951,6 +944,64 @@ body {
 
 
 /* =========================================================
+   DEPLOYMENT STATUS
+   ========================================================= */
+
+.deployment-status {
+    display: flex;
+
+    align-items: center;
+
+    gap: 15px;
+
+    padding: 18px;
+
+    border-radius: 10px;
+
+    background: #eafaf1;
+
+    border: 1px solid #a9dfbf;
+}
+
+
+.deployment-status.failed {
+    background: #fdedec;
+
+    border-color: #f1948a;
+}
+
+
+.deployment-dot {
+    width: 15px;
+
+    height: 15px;
+
+    border-radius: 50%;
+
+    background: #1e8449;
+}
+
+
+.deployment-status.failed .deployment-dot {
+    background: #c0392b;
+}
+
+
+.deployment-title {
+    font-weight: 800;
+}
+
+
+.deployment-description {
+    color: #626567;
+
+    font-size: 12px;
+
+    margin-top: 3px;
+}
+
+
+/* =========================================================
    SERVICE SUMMARY
    ========================================================= */
 
@@ -1149,64 +1200,6 @@ body {
 
 
 /* =========================================================
-   DEPLOYMENT STATUS
-   ========================================================= */
-
-.deployment-status {
-    display: flex;
-
-    align-items: center;
-
-    gap: 15px;
-
-    padding: 18px;
-
-    border-radius: 10px;
-
-    background: #eafaf1;
-
-    border: 1px solid #a9dfbf;
-}
-
-
-.deployment-status.failed {
-    background: #fdedec;
-
-    border-color: #f1948a;
-}
-
-
-.deployment-dot {
-    width: 15px;
-
-    height: 15px;
-
-    border-radius: 50%;
-
-    background: #1e8449;
-}
-
-
-.deployment-status.failed .deployment-dot {
-    background: #c0392b;
-}
-
-
-.deployment-title {
-    font-weight: 800;
-}
-
-
-.deployment-description {
-    color: #626567;
-
-    font-size: 12px;
-
-    margin-top: 3px;
-}
-
-
-/* =========================================================
    FOOTER
    ========================================================= */
 
@@ -1286,7 +1279,7 @@ body {
 
 
         <div class="build-badge">
-            BUILD #${build_number}
+            BUILD #__BUILD_NUMBER__
         </div>
 
     </div>
@@ -1325,11 +1318,11 @@ body {
         </div>
 
         <div class="info-value">
-            #${build_number}
+            #__BUILD_NUMBER__
         </div>
 
         <div class="info-small">
-            ${generated}
+            __GENERATED__
         </div>
 
     </div>
@@ -1342,11 +1335,11 @@ body {
         </div>
 
         <div class="info-value">
-            ${git_branch}
+            __GIT_BRANCH__
         </div>
 
         <div class="info-small">
-            Commit ${git_commit}
+            Commit __GIT_COMMIT__
         </div>
 
     </div>
@@ -1363,7 +1356,7 @@ body {
         </div>
 
         <div class="info-small">
-            ${total_services} services
+            __TOTAL_SERVICES__ services
         </div>
 
     </div>
@@ -1389,7 +1382,111 @@ body {
 
     <div class="pipeline">
 
-        ${pipeline_stages}
+
+        <div class="pipeline-stage completed">
+
+            <div class="stage-number">
+                1
+            </div>
+
+            <div class="stage-name">
+                Checkout
+            </div>
+
+            <div class="stage-state">
+                Completed
+            </div>
+
+        </div>
+
+
+        <div class="pipeline-arrow">
+            →
+        </div>
+
+
+        <div class="pipeline-stage completed">
+
+            <div class="stage-number">
+                2
+            </div>
+
+            <div class="stage-name">
+                Validate
+            </div>
+
+            <div class="stage-state">
+                Completed
+            </div>
+
+        </div>
+
+
+        <div class="pipeline-arrow">
+            →
+        </div>
+
+
+        <div class="pipeline-stage completed">
+
+            <div class="stage-number">
+                3
+            </div>
+
+            <div class="stage-name">
+                Build
+            </div>
+
+            <div class="stage-state">
+                Completed
+            </div>
+
+        </div>
+
+
+        <div class="pipeline-arrow">
+            →
+        </div>
+
+
+        <div class="pipeline-stage completed">
+
+            <div class="stage-number">
+                4
+            </div>
+
+            <div class="stage-name">
+                Deploy
+            </div>
+
+            <div class="stage-state">
+                Completed
+            </div>
+
+        </div>
+
+
+        <div class="pipeline-arrow">
+            →
+        </div>
+
+
+        <div class="pipeline-stage completed">
+
+            <div class="stage-number">
+                5
+            </div>
+
+            <div class="stage-name">
+                Verify
+            </div>
+
+            <div class="stage-state">
+                Completed
+            </div>
+
+        </div>
+
 
     </div>
 
@@ -1539,18 +1636,18 @@ body {
     </div>
 
 
-    <div class="deployment-status ${deployment_class}">
+    <div class="deployment-status __DEPLOYMENT_CLASS__">
 
         <div class="deployment-dot"></div>
 
         <div>
 
             <div class="deployment-title">
-                ${deployment_status}
+                __DEPLOYMENT_STATUS__
             </div>
 
             <div class="deployment-description">
-                Docker Compose deployment verification completed
+                __DEPLOYMENT_DESCRIPTION__
             </div>
 
         </div>
@@ -1577,7 +1674,7 @@ body {
         <div class="summary-card">
 
             <div class="summary-number">
-                ${total_services}
+                __TOTAL_SERVICES__
             </div>
 
             <div class="summary-label">
@@ -1590,7 +1687,7 @@ body {
         <div class="summary-card">
 
             <div class="summary-number">
-                ${healthy_services}
+                __HEALTHY_SERVICES__
             </div>
 
             <div class="summary-label">
@@ -1603,7 +1700,7 @@ body {
         <div class="summary-card">
 
             <div class="summary-number">
-                ${running_services}
+                __RUNNING_SERVICES__
             </div>
 
             <div class="summary-label">
@@ -1616,7 +1713,7 @@ body {
         <div class="summary-card">
 
             <div class="summary-number">
-                ${starting_services}
+                __STARTING_SERVICES__
             </div>
 
             <div class="summary-label">
@@ -1629,7 +1726,7 @@ body {
         <div class="summary-card">
 
             <div class="summary-number">
-                ${failed_services}
+                __FAILED_SERVICES__
             </div>
 
             <div class="summary-label">
@@ -1642,13 +1739,9 @@ body {
     </div>
 
 
-    <!-- =======================================================
-         SERVICE CARDS
-         ======================================================= -->
-
     <div class="service-grid">
 
-        ${html_cards}
+__SERVICE_CARDS__
 
     </div>
 
@@ -1663,7 +1756,7 @@ body {
 
     Generated automatically by Jenkins •
     E-Commerce DevOps Project •
-    ${generated}
+    __GENERATED__
 
 </div>
 
@@ -1674,7 +1767,64 @@ body {
 </body>
 
 </html>
-EOF
+HTML_TEMPLATE
+
+
+                    # -------------------------------------------------
+                    # INJECT DYNAMIC VALUES
+                    # -------------------------------------------------
+                    service_cards=$(cat dashboard/service_cards.html)
+
+                    sed \
+                        -e "s|__BUILD_NUMBER__|${build_number}|g" \
+                        -e "s|__GENERATED__|${generated}|g" \
+                        -e "s|__GIT_BRANCH__|${git_branch}|g" \
+                        -e "s|__GIT_COMMIT__|${git_commit}|g" \
+                        -e "s|__TOTAL_SERVICES__|${total_services}|g" \
+                        -e "s|__HEALTHY_SERVICES__|${healthy_services}|g" \
+                        -e "s|__RUNNING_SERVICES__|${running_services}|g" \
+                        -e "s|__STARTING_SERVICES__|${starting_services}|g" \
+                        -e "s|__FAILED_SERVICES__|${failed_services}|g" \
+                        -e "s|__DEPLOYMENT_CLASS__|${deployment_class}|g" \
+                        -e "s|__DEPLOYMENT_STATUS__|${deployment_status}|g" \
+                        -e "s|__DEPLOYMENT_DESCRIPTION__|${deployment_description}|g" \
+                        dashboard/index.template.html > dashboard/index.html
+
+
+                    # -------------------------------------------------
+                    # INSERT SERVICE CARDS
+                    # -------------------------------------------------
+                    awk -v cards="$service_cards" '
+                        {
+                            if ($0 == "__SERVICE_CARDS__") {
+                                printf "%s\\n", cards
+                            } else {
+                                print
+                            }
+                        }
+                    ' dashboard/index.html > dashboard/index.final.html
+
+
+                    mv dashboard/index.final.html dashboard/index.html
+
+
+                    # -------------------------------------------------
+                    # CLEAN TEMPLATE FILE
+                    # -------------------------------------------------
+                    rm -f dashboard/index.template.html
+                    rm -f dashboard/service_cards.html
+
+
+                    # -------------------------------------------------
+                    # VALIDATE GENERATED HTML
+                    # -------------------------------------------------
+                    test -s dashboard/index.html
+
+                    grep -q "E-Commerce CI/CD Dashboard" dashboard/index.html
+                    grep -q "Service Health Summary" dashboard/index.html
+                    grep -q "backend" dashboard/index.html
+                    grep -q "mysql" dashboard/index.html
+                    grep -q "grafana" dashboard/index.html
 
 
                     echo ""
@@ -1685,6 +1835,7 @@ EOF
                     echo "Build: #${build_number}"
                     echo "Git commit: ${git_commit}"
                     echo "Git branch: ${git_branch}"
+                    echo "Deployment: ${deployment_status}"
                     echo "Total services: ${total_services}"
                     echo "Healthy services: ${healthy_services}"
                     echo "Running services: ${running_services}"
@@ -1694,6 +1845,9 @@ EOF
                     echo ""
                     echo "Dashboard file:"
                     ls -lh dashboard/index.html
+
+                    echo ""
+                    echo "Dashboard validation passed"
                 '''
             }
         }
