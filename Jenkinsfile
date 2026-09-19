@@ -829,48 +829,235 @@ h1 {
     background-size: 28px 28px;
 }
 
-.architecture svg {
+
+/* ============================================================
+   CSS ARCHITECTURE CONNECTORS
+   ============================================================ */
+
+.architecture-connectors {
     position: absolute;
     inset: 0;
-    width: 100%;
-    height: 100%;
+    z-index: 3;
     pointer-events: none;
-    z-index: 1;
 }
 
-.connector {
-    fill: none;
-    stroke: #475569;
-    stroke-width: 2.2;
-    opacity: 0.82;
+.css-arrow {
+    position: absolute;
+    z-index: 3;
 }
 
-.connector.active {
-    stroke: #38bdf8;
-    stroke-width: 2.8;
-    opacity: 0.95;
+.css-arrow.vertical {
+    width: 3px;
+    background: #38bdf8;
+    border-radius: 3px;
 }
 
-.connector.event {
-    stroke: #a78bfa;
-    stroke-dasharray: 7 5;
+.css-arrow.vertical::after {
+    content: "";
+    position: absolute;
+    bottom: -1px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 0;
+    height: 0;
+    border-left: 7px solid transparent;
+    border-right: 7px solid transparent;
+    border-top: 10px solid #38bdf8;
 }
 
-.connector.metrics {
-    stroke: #22c55e;
-    stroke-dasharray: 6 5;
+.css-arrow.horizontal {
+    height: 3px;
+    background: #38bdf8;
+    border-radius: 3px;
 }
 
-.arrow-head {
-    fill: #38bdf8;
+.css-arrow.horizontal::after {
+    content: "";
+    position: absolute;
+    right: -1px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 0;
+    height: 0;
+    border-top: 7px solid transparent;
+    border-bottom: 7px solid transparent;
+    border-left: 10px solid #38bdf8;
 }
 
-.arrow-head-event {
-    fill: #a78bfa;
+
+/* ============================================================
+   CI/CD CONNECTORS
+   ============================================================ */
+
+.github-to-jenkins {
+    left: 590px;
+    top: 107px;
+    height: 28px;
 }
 
-.arrow-head-metrics {
-    fill: #22c55e;
+.jenkins-to-compose {
+    left: 590px;
+    top: 217px;
+    height: 20px;
+}
+
+.compose-to-app {
+    left: 150px;
+    top: 307px;
+    height: 33px;
+}
+
+.compose-to-data {
+    left: 665px;
+    top: 307px;
+    height: 33px;
+}
+
+.compose-to-observability {
+    left: 590px;
+    top: 307px;
+    height: 318px;
+}
+
+
+/* ============================================================
+   APPLICATION CONNECTORS
+   ============================================================ */
+
+.react-to-nginx {
+    left: 205px;
+    top: 425px;
+    width: 175px;
+}
+
+.nginx-to-backend {
+    left: 380px;
+    top: 425px;
+    width: 175px;
+}
+
+
+/* ============================================================
+   BACKEND → DATA
+   ============================================================ */
+
+.backend-to-mysql {
+    left: 235px;
+    top: 455px;
+    width: 430px;
+    height: 48px;
+    border-left: 3px solid #38bdf8;
+    border-bottom: 3px solid #38bdf8;
+    border-radius: 0 0 0 10px;
+}
+
+.backend-to-mysql::after {
+    content: "";
+    position: absolute;
+    right: -1px;
+    bottom: -7px;
+    width: 0;
+    height: 0;
+    border-top: 7px solid transparent;
+    border-bottom: 7px solid transparent;
+    border-left: 10px solid #38bdf8;
+}
+
+.backend-to-redis {
+    left: 235px;
+    top: 455px;
+    width: 560px;
+    height: 68px;
+    border-left: 3px solid #38bdf8;
+    border-bottom: 3px solid #38bdf8;
+    border-right: 3px solid #38bdf8;
+    border-radius: 0 0 10px 10px;
+}
+
+.backend-to-redis::after {
+    content: "";
+    position: absolute;
+    right: -7px;
+    bottom: -1px;
+    width: 0;
+    height: 0;
+    border-left: 7px solid transparent;
+    border-right: 7px solid transparent;
+    border-top: 10px solid #38bdf8;
+}
+
+
+/* ============================================================
+   KAFKA → KAFKA CONNECT
+   ============================================================ */
+
+.kafka-to-connect {
+    left: 995px;
+    top: 455px;
+    height: 35px;
+    background: #a78bfa;
+}
+
+.kafka-to-connect::after {
+    border-top-color: #a78bfa;
+}
+
+.event-arrow {
+    background: #a78bfa !important;
+}
+
+.event-arrow::after {
+    border-top-color: #a78bfa;
+}
+
+
+/* ============================================================
+   KAFKA CONNECT → MYSQL
+   ============================================================ */
+
+.kafka-connect-to-mysql {
+    left: 665px;
+    top: 515px;
+    width: 265px;
+    height: 0;
+    border-top: 3px dashed #a78bfa;
+}
+
+.kafka-connect-to-mysql::after {
+    content: "";
+    position: absolute;
+    left: -1px;
+    top: -7px;
+    width: 0;
+    height: 0;
+    border-top: 7px solid transparent;
+    border-bottom: 7px solid transparent;
+    border-right: 10px solid #a78bfa;
+}
+
+
+/* ============================================================
+   OBSERVABILITY
+   ============================================================ */
+
+.metrics-arrow {
+    background: #22c55e !important;
+}
+
+.metrics-arrow::after {
+    border-left-color: #22c55e;
+}
+
+.cadvisor-to-prometheus {
+    left: 430px;
+    top: 680px;
+    width: 70px;
+}
+
+.prometheus-to-grafana {
+    left: 660px;
+    top: 680px;
+    width: 70px;
 }
 
 
@@ -1535,253 +1722,51 @@ h1 {
 
 
                 <!-- ==================================================
-                     SVG CONNECTOR LAYER
+                     CSS CONNECTOR LAYER
                      ================================================== -->
 
-                <svg
-                    viewBox="0 0 1180 790"
-                    preserveAspectRatio="none"
-                    xmlns="http://www.w3.org/2000/svg"
-                >
+                <div class="architecture-connectors">
 
-                    <defs>
+                    <!-- GitHub → Jenkins -->
+                    <div class="css-arrow vertical github-to-jenkins"></div>
 
-                        <marker
-                            id="arrowBlue"
-                            markerWidth="9"
-                            markerHeight="9"
-                            refX="7"
-                            refY="3.5"
-                            orient="auto"
-                        >
-                            <polygon
-                                points="0 0, 8 3.5, 0 7"
-                                class="arrow-head"
-                            />
-                        </marker>
+                    <!-- Jenkins → Docker Compose -->
+                    <div class="css-arrow vertical jenkins-to-compose"></div>
 
+                    <!-- Docker Compose → Application -->
+                    <div class="css-arrow vertical compose-to-app"></div>
 
-                        <marker
-                            id="arrowPurple"
-                            markerWidth="9"
-                            markerHeight="9"
-                            refX="7"
-                            refY="3.5"
-                            orient="auto"
-                        >
-                            <polygon
-                                points="0 0, 8 3.5, 0 7"
-                                class="arrow-head-event"
-                            />
-                        </marker>
+                    <!-- Docker Compose → Data -->
+                    <div class="css-arrow vertical compose-to-data"></div>
 
+                    <!-- Docker Compose → Observability -->
+                    <div class="css-arrow vertical compose-to-observability"></div>
 
-                        <marker
-                            id="arrowGreen"
-                            markerWidth="9"
-                            markerHeight="9"
-                            refX="7"
-                            refY="3.5"
-                            orient="auto"
-                        >
-                            <polygon
-                                points="0 0, 8 3.5, 0 7"
-                                class="arrow-head-metrics"
-                            />
-                        </marker>
+                    <!-- React → Nginx -->
+                    <div class="css-arrow horizontal react-to-nginx"></div>
 
-                    </defs>
+                    <!-- Nginx → Backend -->
+                    <div class="css-arrow horizontal nginx-to-backend"></div>
 
+                    <!-- Backend → MySQL -->
+                    <div class="css-arrow backend-to-mysql"></div>
 
-                    <!-- =============================================
-                         CI/CD PATH
-                         ============================================= -->
+                    <!-- Backend → Redis -->
+                    <div class="css-arrow backend-to-redis"></div>
 
-                    <path
-                        d="M590 108 L590 135"
-                        class="connector active"
-                        marker-end="url(#arrowBlue)"
-                    />
+                    <!-- Kafka → Kafka Connect -->
+                    <div class="css-arrow vertical kafka-to-connect event-arrow"></div>
 
-                    <path
-                        d="M590 218 L590 225"
-                        class="connector active"
-                        marker-end="url(#arrowBlue)"
-                    />
+                    <!-- Kafka Connect → MySQL -->
+                    <div class="css-arrow kafka-connect-to-mysql event-arrow"></div>
 
-                    <path
-                        d="M590 307 L590 335"
-                        class="connector active"
-                        marker-end="url(#arrowBlue)"
-                    />
+                    <!-- cAdvisor → Prometheus -->
+                    <div class="css-arrow horizontal cadvisor-to-prometheus metrics-arrow"></div>
 
+                    <!-- Prometheus → Grafana -->
+                    <div class="css-arrow horizontal prometheus-to-grafana metrics-arrow"></div>
 
-                    <!-- =============================================
-                         COMPOSE → APPLICATION SERVICES
-                         ============================================= -->
-
-                    <path
-                        d="M590 315
-                           L590 330
-                           L150 330
-                           L150 340"
-                        class="connector active"
-                        marker-end="url(#arrowBlue)"
-                    />
-
-                    <path
-                        d="M590 315
-                           L590 330
-                           L325 330
-                           L325 340"
-                        class="connector active"
-                        marker-end="url(#arrowBlue)"
-                    />
-
-                    <path
-                        d="M590 315
-                           L590 330
-                           L500 330
-                           L500 340"
-                        class="connector active"
-                        marker-end="url(#arrowBlue)"
-                    />
-
-
-                    <!-- =============================================
-                         COMPOSE → DATA SERVICES
-                         ============================================= -->
-
-                    <path
-                        d="M590 315
-                           L590 330
-                           L665 330
-                           L665 340"
-                        class="connector active"
-                        marker-end="url(#arrowBlue)"
-                    />
-
-                    <path
-                        d="M590 315
-                           L590 330
-                           L830 330
-                           L830 340"
-                        class="connector active"
-                        marker-end="url(#arrowBlue)"
-                    />
-
-                    <path
-                        d="M590 315
-                           L590 330
-                           L995 330
-                           L995 340"
-                        class="connector active"
-                        marker-end="url(#arrowBlue)"
-                    />
-
-
-                    <!-- =============================================
-                         COMPOSE → OBSERVABILITY
-                         ============================================= -->
-
-                    <path
-                        d="M590 315
-                           L590 625
-                           L470 625"
-                        class="connector active"
-                        marker-end="url(#arrowBlue)"
-                    />
-
-
-                    <!-- =============================================
-                         APPLICATION FLOW
-                         React → Nginx → Backend
-                         ============================================= -->
-
-                    <path
-                        d="M500 425 L325 425"
-                        class="connector"
-                        marker-end="url(#arrowBlue)"
-                    />
-
-                    <path
-                        d="M325 425 L150 425"
-                        class="connector"
-                        marker-end="url(#arrowBlue)"
-                    />
-
-
-                    <!-- =============================================
-                         BACKEND → DATA
-                         ============================================= -->
-
-                    <path
-                        d="M235 455
-                           L235 500
-                           L630 500"
-                        class="connector"
-                        marker-end="url(#arrowBlue)"
-                    />
-
-                    <path
-                        d="M235 455
-                           L235 520
-                           L795 520
-                           L795 455"
-                        class="connector"
-                        marker-end="url(#arrowBlue)"
-                    />
-
-
-                    <!-- =============================================
-                         KAFKA → KAFKA CONNECT
-                         ============================================= -->
-
-                    <path
-                        d="M995 455
-                           L995 500
-                           L995 500
-                           L995 490"
-                        class="connector event"
-                        marker-end="url(#arrowPurple)"
-                    />
-
-
-                    <!-- =============================================
-                         KAFKA CONNECT → MYSQL / CDC
-                         ============================================= -->
-
-                    <path
-                        d="M930 515
-                           L665 515
-                           L665 455"
-                        class="connector event"
-                        marker-end="url(#arrowPurple)"
-                    />
-
-
-                    <!-- =============================================
-                         CADVISOR → PROMETHEUS
-                         ============================================= -->
-
-                    <path
-                        d="M430 680 L500 680"
-                        class="connector metrics"
-                        marker-end="url(#arrowGreen)"
-                    />
-
-
-                    <!-- =============================================
-                         PROMETHEUS → GRAFANA
-                         ============================================= -->
-
-                    <path
-                        d="M660 680 L730 680"
-                        class="connector metrics"
-                        marker-end="url(#arrowGreen)"
-                    />
-
-                </svg>
+                </div>
 
 
                 <!-- ==================================================
@@ -2404,9 +2389,11 @@ HTML
 
                     grep -q "cAdvisor" dashboard/index.html
 
-                    grep -q "<svg" dashboard/index.html
+                    grep -q "architecture-connectors" dashboard/index.html
 
-                    grep -q "marker-end" dashboard/index.html
+                    grep -q "github-to-jenkins" dashboard/index.html
+
+                    grep -q "prometheus-to-grafana" dashboard/index.html
 
 
                     # =================================================
