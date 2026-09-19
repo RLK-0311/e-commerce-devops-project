@@ -1,4 +1,5 @@
 pipeline {
+
     agent any
 
     environment {
@@ -21,11 +22,13 @@ pipeline {
 
     stages {
 
-        // =========================================================
+        // ============================================================
         // CHECKOUT
-        // =========================================================
+        // ============================================================
+
         stage('Checkout') {
             steps {
+
                 echo '========================================='
                 echo 'Cleaning Jenkins workspace'
                 echo '========================================='
@@ -35,6 +38,7 @@ pipeline {
                 echo 'Checking out source code...'
 
                 script {
+
                     def scmVars = checkout(scm)
 
                     env.DEPLOYED_GIT_COMMIT = scmVars.GIT_COMMIT ?: sh(
@@ -65,11 +69,13 @@ pipeline {
         }
 
 
-        // =========================================================
-        // PROJECT VALIDATION
-        // =========================================================
+        // ============================================================
+        // VALIDATE PROJECT
+        // ============================================================
+
         stage('Validate Project') {
             steps {
+
                 sh '''
                     set -e
 
@@ -78,56 +84,62 @@ pipeline {
                     echo "========================================="
 
                     test -f docker-compose.yml
-                    test -d backend
-                    test -d frontend
 
-                    echo "Checking Prometheus configuration..."
-                    test -f monitoring/prometheus/prometheus.yml
+                    echo "docker-compose.yml found"
 
-                    echo "Prometheus configuration file:"
-                    ls -l monitoring/prometheus/prometheus.yml
+                    docker compose config -q
+
+                    echo "Docker Compose configuration is valid"
 
                     echo ""
-                    echo "Validating Docker Compose configuration..."
-
-                    docker compose config --quiet
+                    echo "Compose services:"
+                    docker compose config --services
 
                     echo ""
-                    echo "Project validation passed"
+                    echo "Project validation completed successfully"
                 '''
             }
         }
 
 
-        // =========================================================
+        // ============================================================
         // DOCKER SERVICES
-        // =========================================================
+        // ============================================================
+
         stage('Docker Services') {
+
             parallel {
+
+                // ----------------------------------------------------
+                // BUILD APPLICATION IMAGES
+                // ----------------------------------------------------
 
                 stage('Build Application Images') {
                     steps {
+
                         sh '''
                             set -e
 
                             echo "========================================="
-                            echo "Building application-owned images"
+                            echo "Building application images"
                             echo "========================================="
 
-                            docker compose build \
-                                backend \
-                                nginx \
-                                prometheus
+                            docker compose build backend nginx
 
                             echo ""
-                            echo "Application images built successfully"
+                            echo "Application image build completed"
                         '''
                     }
                 }
 
 
+                // ----------------------------------------------------
+                // PULL INFRASTRUCTURE IMAGES
+                // ----------------------------------------------------
+
                 stage('Pull Infrastructure Images') {
                     steps {
+
                         sh '''
                             set -e
 
@@ -135,13 +147,11 @@ pipeline {
                             echo "Pulling infrastructure images"
                             echo "========================================="
 
-                            docker compose pull \
-                                mysql \
-                                redis \
-                                kafka \
-                                kafka-connect \
-                                grafana \
-                                cadvisor
+                            docker pull mysql:8.4
+                            docker pull redis:7
+                            docker pull prom/prometheus:v3.5.0
+                            docker pull grafana/grafana:12.1.1
+                            docker pull gcr.io/cadvisor/cadvisor:v0.52.1
 
                             echo ""
                             echo "Infrastructure images pulled successfully"
@@ -152,76 +162,88 @@ pipeline {
         }
 
 
-        // =========================================================
+        // ============================================================
         // DOCKER COMPOSE VALIDATION
-        // =========================================================
+        // ============================================================
+
         stage('Docker Compose Validation') {
             steps {
+
                 sh '''
                     set -e
 
                     echo "========================================="
-                    echo "Docker Compose validation"
+                    echo "Validating Docker Compose"
                     echo "========================================="
 
-                    docker compose config --quiet
+                    docker compose config -q
 
-                    echo ""
-                    echo "Docker Compose configuration is valid"
+                    echo "Docker Compose configuration validated successfully"
                 '''
             }
         }
 
 
-        // =========================================================
+        // ============================================================
         // DOCKER IMAGES
-        // =========================================================
+        // ============================================================
+
         stage('Docker Images') {
             steps {
+
                 sh '''
                     set -e
 
                     echo "========================================="
-                    echo "Docker images"
+                    echo "Docker Images"
                     echo "========================================="
 
-                    docker compose images
-                '''
-            }
-        }
-
-
-        // =========================================================
-        // DEPLOYMENT
-        // =========================================================
-        stage('Docker Deployment') {
-            steps {
-                sh '''
-                    set -e
-
-                    echo "========================================="
-                    echo "Deploying E-Commerce platform"
-                    echo "========================================="
-
-                    docker compose up -d --remove-orphans
+                    docker images --format "table {{.Repository}}\\t{{.Tag}}\\t{{.Size}}"
 
                     echo ""
-                    echo "Docker Compose deployment completed"
+                    echo "Docker image stage completed"
                 '''
             }
         }
 
 
-        // =========================================================
-        // SERVICE VERIFICATION
-        // =========================================================
-        stage('Service Verification') {
+        // ============================================================
+        // DOCKER DEPLOYMENT
+        // ============================================================
+
+        stage('Docker Deployment') {
             steps {
+
                 sh '''
                     set -e
 
                     echo "========================================="
-                    echo "Verifying Docker services"
+                    echo "Deploying E-Commerce Platform"
+                    echo "========================================="
+
+                    docker compose up -d
+
+                    echo ""
+                    echo "Docker Compose deployment started"
+
+                    docker compose ps
+                '''
+            }
+        }
+
+
+        // ============================================================
+        // SERVICE VERIFICATION
+        // ============================================================
+
+        stage('Service Verification') {
+            steps {
+
+                sh '''
+                    set -e
+
+                    echo "========================================="
+                    echo "Verifying E-Commerce Services"
                     echo "========================================="
 
                     services="backend mysql redis kafka kafka-connect nginx prometheus grafana cadvisor"
@@ -231,95 +253,62 @@ pipeline {
 
                     while [ "$attempt" -le "$max_attempts" ]; do
 
-                        echo ""
-                        echo "Verification attempt $attempt/$max_attempts"
-                        echo "-----------------------------------------"
-
                         failed=0
                         starting=0
 
-                        printf "%-20s %-15s %-15s\\n" \
-                            "SERVICE" "STATE" "HEALTH"
-
-                        printf "%-20s %-15s %-15s\\n" \
-                            "-------" "-----" "------"
-
+                        echo ""
+                        echo "Verification attempt $attempt/$max_attempts"
+                        echo "-----------------------------------------"
 
                         for service in $services; do
 
                             container_id=$(docker compose ps -q "$service" 2>/dev/null || true)
 
                             if [ -z "$container_id" ]; then
-
-                                printf "%-20s %-15s %-15s\\n" \
-                                    "$service" "MISSING" "-"
-
+                                echo "[$service] CONTAINER NOT FOUND"
                                 failed=1
                                 continue
                             fi
 
+                            state=$(docker inspect -f '{{.State.Status}}' "$container_id" 2>/dev/null || echo "unknown")
 
-                            state=$(docker inspect \
-                                -f '{{.State.Status}}' \
-                                "$container_id" \
-                                2>/dev/null || echo "unknown")
-
-
-                            health=$(docker inspect \
-                                -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' \
-                                "$container_id" \
-                                2>/dev/null || echo "unknown")
-
-
-                            printf "%-20s %-15s %-15s\\n" \
-                                "$service" "$state" "$health"
-
+                            health=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container_id" 2>/dev/null || echo "unknown")
 
                             if [ "$state" != "running" ]; then
-
+                                echo "[$service] state=$state health=$health"
                                 failed=1
 
                             elif [ "$health" = "starting" ]; then
-
+                                echo "[$service] state=running health=starting"
                                 starting=1
 
-                            elif [ "$health" != "healthy" ] && \
-                                 [ "$health" != "none" ]; then
-
+                            elif [ "$health" != "healthy" ] && [ "$health" != "none" ]; then
+                                echo "[$service] state=running health=$health"
                                 failed=1
 
+                            else
+                                echo "[$service] state=running health=$health"
                             fi
 
                         done
 
-
                         echo ""
 
-
                         if [ "$failed" -eq 0 ] && [ "$starting" -eq 0 ]; then
-
                             echo "========================================="
-                            echo "All required Docker services are healthy/running."
+                            echo "All services verified successfully"
                             echo "========================================="
-
                             exit 0
-
                         fi
-
 
                         if [ "$failed" -eq 1 ] && [ "$starting" -eq 0 ]; then
-
                             echo "========================================="
-                            echo "One or more services failed verification."
+                            echo "Service verification failed"
                             echo "========================================="
-
                             exit 1
-
                         fi
 
-
-                        echo "Some services are still starting."
-                        echo "Waiting 5 seconds before checking again..."
+                        echo "Waiting for services to become healthy..."
 
                         sleep 5
 
@@ -327,36 +316,9 @@ pipeline {
 
                     done
 
-
                     echo "========================================="
-                    echo "Service verification timed out."
+                    echo "Service verification timed out"
                     echo "========================================="
-
-
-                    echo ""
-                    echo "Final Docker Compose status:"
-                    docker compose ps
-
-
-                    echo ""
-                    echo "Backend logs:"
-                    docker compose logs --tail=50 backend
-
-
-                    echo ""
-                    echo "Recent backend health-check information:"
-
-                    backend_container=$(docker compose ps -q backend 2>/dev/null || true)
-
-                    if [ -n "$backend_container" ]; then
-
-                        docker inspect \
-                            -f '{{range .State.Health.Log}}{{.Start}} | Exit={{.ExitCode}} | {{.Output}}{{"\\n"}}{{end}}' \
-                            "$backend_container" \
-                            2>/dev/null || true
-
-                    fi
-
 
                     exit 1
                 '''
@@ -364,11 +326,14 @@ pipeline {
         }
 
 
-        // =========================================================
-        // GENERATE VISUAL CI/CD DASHBOARD
-        // =========================================================
+        // ============================================================
+        // GENERATE ARCHITECTURE DASHBOARD
+        // ============================================================
+
         stage('Generate Architecture Dashboard') {
+
             steps {
+
                 sh '''
                     set -e
 
@@ -378,8 +343,8 @@ pipeline {
 
                     mkdir -p dashboard
 
-                    generated=$(date '+%Y-%m-%d %H:%M:%S')
-                    build_number="${BUILD_NUMBER:-N/A}"
+                    generated="$(date '+%Y-%m-%d %H:%M:%S')"
+                    build_number="${BUILD_NUMBER:-unknown}"
 
                     git_commit="${DEPLOYED_GIT_COMMIT:-$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")}"
 
@@ -392,148 +357,214 @@ pipeline {
                     fi
 
 
-                    # -------------------------------------------------
-                    # SERVICES
-                    # -------------------------------------------------
+                    # =================================================
+                    # SERVICE STATUS
+                    # =================================================
+
                     services="backend mysql redis kafka kafka-connect nginx prometheus grafana cadvisor"
 
-
-                    # -------------------------------------------------
-                    # SERVICE COUNTERS
-                    # -------------------------------------------------
                     total_services=0
                     healthy_services=0
                     running_services=0
                     starting_services=0
                     failed_services=0
+                    no_healthcheck_services=0
 
-
-                    # -------------------------------------------------
-                    # SERVICE CARDS
-                    # -------------------------------------------------
                     : > dashboard/service_cards.html
 
+                    service_status() {
+
+                        service="$1"
+
+                        container_id=$(docker compose ps -q "$service" 2>/dev/null || true)
+
+                        if [ -z "$container_id" ]; then
+                            echo "failed|not-found|FAILED"
+                            return
+                        fi
+
+                        state=$(docker inspect -f '{{.State.Status}}' "$container_id" 2>/dev/null || echo "unknown")
+
+                        health=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container_id" 2>/dev/null || echo "unknown")
+
+                        if [ "$state" != "running" ]; then
+                            echo "failed|$state|FAILED"
+
+                        elif [ "$health" = "healthy" ]; then
+                            echo "healthy|healthy|HEALTHY"
+
+                        elif [ "$health" = "starting" ]; then
+                            echo "starting|starting|STARTING"
+
+                        elif [ "$health" = "none" ]; then
+                            echo "running|running|RUNNING"
+
+                        else
+                            echo "failed|$health|FAILED"
+                        fi
+                    }
+
+
+                    service_icon() {
+
+                        case "$1" in
+                            nginx)
+                                echo "NG"
+                                ;;
+                            backend)
+                                echo "API"
+                                ;;
+                            mysql)
+                                echo "DB"
+                                ;;
+                            redis)
+                                echo "RD"
+                                ;;
+                            kafka)
+                                echo "KF"
+                                ;;
+                            kafka-connect)
+                                echo "KC"
+                                ;;
+                            prometheus)
+                                echo "PM"
+                                ;;
+                            grafana)
+                                echo "GF"
+                                ;;
+                            cadvisor)
+                                echo "CA"
+                                ;;
+                            *)
+                                echo "SV"
+                                ;;
+                        esac
+                    }
+
+
+                    service_label() {
+
+                        case "$1" in
+                            nginx)
+                                echo "Nginx"
+                                ;;
+                            backend)
+                                echo "Node / Express"
+                                ;;
+                            mysql)
+                                echo "MySQL"
+                                ;;
+                            redis)
+                                echo "Redis"
+                                ;;
+                            kafka)
+                                echo "Kafka"
+                                ;;
+                            kafka-connect)
+                                echo "Kafka Connect"
+                                ;;
+                            prometheus)
+                                echo "Prometheus"
+                                ;;
+                            grafana)
+                                echo "Grafana"
+                                ;;
+                            cadvisor)
+                                echo "cAdvisor"
+                                ;;
+                            *)
+                                echo "$1"
+                                ;;
+                        esac
+                    }
+
+
+                    service_description() {
+
+                        case "$1" in
+                            nginx)
+                                echo "Reverse Proxy"
+                                ;;
+                            backend)
+                                echo "Backend API"
+                                ;;
+                            mysql)
+                                echo "Application Database"
+                                ;;
+                            redis)
+                                echo "Cache Layer"
+                                ;;
+                            kafka)
+                                echo "Event Streaming"
+                                ;;
+                            kafka-connect)
+                                echo "Debezium Integration"
+                                ;;
+                            prometheus)
+                                echo "Metrics Collection"
+                                ;;
+                            grafana)
+                                echo "Monitoring Dashboard"
+                                ;;
+                            cadvisor)
+                                echo "Container Metrics"
+                                ;;
+                            *)
+                                echo "Docker Service"
+                                ;;
+                        esac
+                    }
+
+
+                    # =================================================
+                    # BUILD SERVICE CARDS
+                    # =================================================
 
                     for service in $services; do
 
                         total_services=$((total_services + 1))
 
-                        container_id=$(docker compose ps -q "$service" 2>/dev/null || true)
+                        result=$(service_status "$service")
 
+                        status_class=$(printf '%s' "$result" | cut -d'|' -f1)
+                        status_value=$(printf '%s' "$result" | cut -d'|' -f2)
+                        status_label=$(printf '%s' "$result" | cut -d'|' -f3)
 
-                        if [ -z "$container_id" ]; then
+                        if [ "$status_class" = "healthy" ]; then
+                            healthy_services=$((healthy_services + 1))
+                            running_services=$((running_services + 1))
 
-                            status="FAILED"
-                            detail="Container not found"
-                            status_class="failed"
-                            status_icon="×"
-                            container_name="N/A"
-                            image_name="N/A"
+                        elif [ "$status_class" = "running" ]; then
+                            running_services=$((running_services + 1))
+                            no_healthcheck_services=$((no_healthcheck_services + 1))
 
-                            failed_services=$((failed_services + 1))
+                        elif [ "$status_class" = "starting" ]; then
+                            starting_services=$((starting_services + 1))
+                            running_services=$((running_services + 1))
 
                         else
-
-                            state=$(docker inspect \
-                                -f '{{.State.Status}}' \
-                                "$container_id" \
-                                2>/dev/null || echo "unknown")
-
-
-                            health=$(docker inspect \
-                                -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' \
-                                "$container_id" \
-                                2>/dev/null || echo "unknown")
-
-
-                            container_name=$(docker inspect \
-                                -f '{{.Name}}' \
-                                "$container_id" \
-                                2>/dev/null | sed 's#^/##' || echo "$service")
-
-
-                            image_name=$(docker inspect \
-                                -f '{{.Config.Image}}' \
-                                "$container_id" \
-                                2>/dev/null || echo "unknown")
-
-
-                            if [ "$state" = "running" ] && \
-                               [ "$health" = "healthy" ]; then
-
-                                status="HEALTHY"
-                                detail="Running and healthy"
-                                status_class="healthy"
-                                status_icon="✓"
-
-                                healthy_services=$((healthy_services + 1))
-                                running_services=$((running_services + 1))
-
-                            elif [ "$state" = "running" ] && \
-                                 [ "$health" = "none" ]; then
-
-                                status="RUNNING"
-                                detail="Running without healthcheck"
-                                status_class="running"
-                                status_icon="●"
-
-                                running_services=$((running_services + 1))
-
-                            elif [ "$state" = "running" ] && \
-                                 [ "$health" = "starting" ]; then
-
-                                status="STARTING"
-                                detail="Healthcheck still starting"
-                                status_class="starting"
-                                status_icon="◐"
-
-                                starting_services=$((starting_services + 1))
-                                running_services=$((running_services + 1))
-
-                            else
-
-                                status="FAILED"
-                                detail="State: $state | Health: $health"
-                                status_class="failed"
-                                status_icon="×"
-
-                                failed_services=$((failed_services + 1))
-
-                            fi
-
+                            failed_services=$((failed_services + 1))
                         fi
 
+                        icon=$(service_icon "$service")
+                        label=$(service_label "$service")
+                        description=$(service_description "$service")
 
                         cat >> dashboard/service_cards.html <<EOF
 <div class="service-card ${status_class}">
     <div class="service-card-top">
-        <div class="service-pictogram ${status_class}">
-            ${status_icon}
-        </div>
-
-        <div class="service-card-name">
-            ${service}
-        </div>
-
-        <div class="service-status-pill ${status_class}">
-            ${status}
+        <div class="service-icon">${icon}</div>
+        <div>
+            <div class="service-name">${label}</div>
+            <div class="service-description">${description}</div>
         </div>
     </div>
-
-    <div class="service-detail">
-        ${detail}
+    <div class="service-card-status">
+        <span class="status-dot"></span>
+        ${status_label}
     </div>
-
-    <div class="service-meta">
-        <div>
-            <span>Container</span>
-            <strong>${container_name}</strong>
-        </div>
-
-        <div>
-            <span>Image</span>
-            <strong>${image_name}</strong>
-        </div>
+    <div class="service-card-meta">
+        Docker Compose service: ${service}
     </div>
 </div>
 EOF
@@ -541,29 +572,46 @@ EOF
                     done
 
 
-                    # -------------------------------------------------
-                    # DEPLOYMENT STATUS
-                    # -------------------------------------------------
-                    if [ "$failed_services" -eq 0 ]; then
-                        deployment_status="HEALTHY"
-                        deployment_class="healthy"
-                        deployment_description="All required Docker services are running and verified."
-                    else
-                        deployment_status="DEGRADED"
-                        deployment_class="failed"
-                        deployment_description="One or more Docker services failed verification."
-                    fi
+                    # =================================================
+                    # DIAGRAM STATUS VARIABLES
+                    # =================================================
+
+                    get_diagram_status() {
+
+                        result=$(service_status "$1")
+
+                        status_class=$(printf '%s' "$result" | cut -d'|' -f1)
+                        status_label=$(printf '%s' "$result" | cut -d'|' -f3)
+
+                        echo "${status_class}|${status_label}"
+                    }
 
 
-                    # -------------------------------------------------
-                    # GENERATE HTML TEMPLATE
-                    # -------------------------------------------------
-                    cat > dashboard/index.template.html <<'HTML_TEMPLATE'
+                    nginx_status=$(get_diagram_status nginx)
+                    backend_status=$(get_diagram_status backend)
+                    mysql_status=$(get_diagram_status mysql)
+                    redis_status=$(get_diagram_status redis)
+                    kafka_status=$(get_diagram_status kafka)
+                    kafka_connect_status=$(get_diagram_status kafka-connect)
+                    prometheus_status=$(get_diagram_status prometheus)
+                    grafana_status=$(get_diagram_status grafana)
+                    cadvisor_status=$(get_diagram_status cadvisor)
+
+
+                    # =================================================
+                    # CREATE HTML DASHBOARD
+                    # =================================================
+
+                    cat > dashboard/index.template.html <<'HTML'
+
 <!DOCTYPE html>
+
 <html lang="en">
 
 <head>
+
 <meta charset="UTF-8">
+
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 
 <title>E-Commerce CI/CD Control Center</title>
@@ -576,783 +624,670 @@ EOF
 
 body {
     margin: 0;
-    background: #eef2f7;
-    color: #17202a;
+    background:
+        radial-gradient(circle at top left, rgba(56, 189, 248, 0.08), transparent 32%),
+        radial-gradient(circle at top right, rgba(139, 92, 246, 0.08), transparent 30%),
+        #07111f;
+    color: #e5eef8;
     font-family:
+        Inter,
+        ui-sans-serif,
+        system-ui,
         -apple-system,
         BlinkMacSystemFont,
         "Segoe UI",
-        Arial,
         sans-serif;
 }
 
 .container {
-    max-width: 1500px;
+    width: min(1500px, 94%);
     margin: 0 auto;
-    padding: 28px;
+    padding: 32px 0 50px;
 }
-
-
-/* =========================================================
-   HEADER
-   ========================================================= */
 
 .hero {
     position: relative;
     overflow: hidden;
-    padding: 32px;
-    border-radius: 20px;
-    color: white;
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    border-radius: 22px;
+    padding: 34px;
     background:
-        linear-gradient(135deg, #101820 0%, #1f3448 55%, #253f55 100%);
-    box-shadow: 0 12px 35px rgba(16, 24, 32, .18);
-    margin-bottom: 20px;
+        linear-gradient(
+            135deg,
+            rgba(15, 23, 42, 0.96),
+            rgba(10, 25, 42, 0.92)
+        );
+    box-shadow: 0 25px 70px rgba(0, 0, 0, 0.32);
 }
 
 .hero:after {
     content: "";
     position: absolute;
-    width: 260px;
-    height: 260px;
+    width: 320px;
+    height: 320px;
+    right: -120px;
+    top: -140px;
     border-radius: 50%;
-    right: -90px;
-    top: -100px;
-    border: 35px solid rgba(255,255,255,.05);
-}
-
-.hero-content {
-    position: relative;
-    z-index: 2;
-}
-
-.hero-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    gap: 20px;
+    background: rgba(56, 189, 248, 0.08);
 }
 
 .eyebrow {
+    color: #38bdf8;
     font-size: 12px;
+    font-weight: 800;
+    letter-spacing: 0.16em;
     text-transform: uppercase;
-    letter-spacing: 2px;
-    color: #9fb3c8;
-    font-weight: 700;
-    margin-bottom: 8px;
 }
 
-.hero h1 {
-    margin: 0;
-    font-size: 34px;
-    line-height: 1.15;
+h1 {
+    margin: 8px 0;
+    font-size: clamp(28px, 4vw, 48px);
+    line-height: 1.05;
 }
 
-.hero-description {
-    margin-top: 10px;
-    color: #c8d3de;
-    font-size: 14px;
+.hero-subtitle {
+    margin-top: 12px;
+    color: #94a3b8;
+    font-size: 15px;
 }
 
-.success-badge {
+.build-pill {
     display: inline-flex;
     align-items: center;
     gap: 8px;
-    padding: 11px 17px;
-    border-radius: 30px;
-    background: #1e8449;
-    font-size: 13px;
+    margin-top: 22px;
+    padding: 8px 13px;
+    border-radius: 999px;
+    background: rgba(34, 197, 94, 0.10);
+    border: 1px solid rgba(34, 197, 94, 0.30);
+    color: #86efac;
     font-weight: 800;
-    white-space: nowrap;
+    font-size: 12px;
 }
 
-.success-dot {
-    width: 9px;
-    height: 9px;
+.build-pill .dot {
+    width: 8px;
+    height: 8px;
     border-radius: 50%;
-    background: #d5f5e3;
+    background: #22c55e;
+    box-shadow: 0 0 12px rgba(34, 197, 94, 0.8);
 }
-
-
-/* =========================================================
-   BUILD INFORMATION
-   ========================================================= */
 
 .info-grid {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
     gap: 14px;
-    margin-bottom: 20px;
+    margin-top: 20px;
 }
 
 .info-card {
-    background: white;
-    border: 1px solid #e1e7ed;
-    border-radius: 14px;
     padding: 18px;
-    box-shadow: 0 4px 14px rgba(20, 30, 40, .05);
+    border-radius: 15px;
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    background: rgba(15, 23, 42, 0.76);
 }
 
 .info-label {
-    color: #82909d;
-    font-size: 10px;
+    color: #64748b;
+    font-size: 11px;
     text-transform: uppercase;
-    letter-spacing: 1.2px;
-    font-weight: 800;
+    letter-spacing: 0.10em;
 }
 
 .info-value {
-    margin-top: 8px;
-    font-size: 20px;
+    margin-top: 7px;
+    color: #f8fafc;
+    font-size: 17px;
     font-weight: 800;
     word-break: break-word;
 }
 
-.info-sub {
-    margin-top: 4px;
-    color: #8a969f;
-    font-size: 11px;
-}
-
-
-/* =========================================================
-   SECTIONS
-   ========================================================= */
-
 .section {
-    background: white;
-    border: 1px solid #e1e7ed;
-    border-radius: 18px;
-    padding: 25px;
-    margin-bottom: 20px;
-    box-shadow: 0 4px 14px rgba(20, 30, 40, .05);
+    margin-top: 30px;
 }
 
-.section-heading {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 15px;
-    margin-bottom: 5px;
+.section-header {
+    margin-bottom: 15px;
 }
 
 .section-title {
-    font-size: 21px;
-    font-weight: 800;
-}
-
-.section-subtitle {
-    color: #82909d;
-    font-size: 13px;
-    margin-bottom: 22px;
-}
-
-
-/* =========================================================
-   CI/CD FLOW
-   ========================================================= */
-
-.flow {
-    display: flex;
-    align-items: stretch;
-    justify-content: center;
-    gap: 0;
-}
-
-.flow-node {
-    position: relative;
-    flex: 1;
-    max-width: 210px;
-    min-width: 150px;
-    text-align: center;
-}
-
-.flow-card {
-    height: 145px;
-    padding: 18px 12px;
-    border-radius: 16px;
-    border: 2px solid #a9dfbf;
-    background: #f1fbf5;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-}
-
-.flow-icon {
-    width: 46px;
-    height: 46px;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: #1e8449;
-    color: white;
-    font-size: 20px;
-    font-weight: 900;
-    margin-bottom: 10px;
-}
-
-.flow-title {
-    font-size: 14px;
-    font-weight: 800;
-}
-
-.flow-status {
-    margin-top: 4px;
-    color: #1e8449;
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: .8px;
-    font-weight: 800;
-}
-
-.flow-arrow {
-    align-self: center;
-    width: 55px;
-    position: relative;
-    text-align: center;
-    color: #71808e;
-    font-size: 25px;
-    font-weight: 800;
-}
-
-.flow-arrow:before {
-    content: "";
-    position: absolute;
-    left: 4px;
-    right: 4px;
-    top: 50%;
-    height: 2px;
-    background: #c9d2db;
-    z-index: 0;
-}
-
-.flow-arrow span {
-    position: relative;
-    z-index: 1;
-    background: white;
-    padding: 0 3px;
-}
-
-
-/* =========================================================
-   ARCHITECTURE DIAGRAM
-   ========================================================= */
-
-.architecture-canvas {
-    border-radius: 18px;
-    background: #f7f9fb;
-    border: 1px solid #e2e8ee;
-    padding: 24px;
-    overflow-x: auto;
-}
-
-.arch-flow {
-    min-width: 1000px;
-}
-
-.arch-source {
-    display: flex;
-    justify-content: center;
-    margin-bottom: 18px;
-}
-
-.arch-source-box {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 13px 22px;
-    border-radius: 14px;
-    background: #17202a;
-    color: white;
-    box-shadow: 0 6px 16px rgba(0,0,0,.12);
-}
-
-.arch-source-icon {
-    width: 38px;
-    height: 38px;
-    border-radius: 50%;
-    background: #273746;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-weight: 900;
-}
-
-.arch-source-title {
-    font-weight: 800;
-}
-
-.arch-source-sub {
-    color: #b8c4cf;
-    font-size: 11px;
-    margin-top: 2px;
-}
-
-.arch-down {
-    height: 28px;
-    width: 2px;
-    background: #aab7c4;
-    margin: 0 auto;
-}
-
-.jenkins-box {
-    width: 300px;
-    margin: 0 auto;
-    padding: 16px;
-    text-align: center;
-    border: 2px solid #a9cce3;
-    background: #eaf2f8;
-    border-radius: 15px;
-}
-
-.jenkins-title {
-    font-weight: 900;
-    color: #1b4f72;
-}
-
-.jenkins-sub {
-    color: #5d6d7e;
-    font-size: 11px;
-    margin-top: 3px;
-}
-
-.arch-layers {
-    display: grid;
-    grid-template-columns: 1fr 1.15fr 1fr;
-    gap: 16px;
-    margin-top: 20px;
-}
-
-.arch-layer {
-    padding: 18px;
-    border-radius: 16px;
-    border: 1px solid #dfe6ec;
-    background: white;
-}
-
-.layer-title {
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    color: #71808e;
-    font-weight: 900;
-    margin-bottom: 14px;
-    text-align: center;
-}
-
-.arch-nodes {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-}
-
-.arch-node {
-    position: relative;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 11px;
-    border-radius: 11px;
-    border: 1px solid #dce4eb;
-    background: #f9fafb;
-}
-
-.arch-node-icon {
-    width: 35px;
-    height: 35px;
-    flex-shrink: 0;
-    border-radius: 10px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: #eaf2f8;
-    color: #1b4f72;
-    font-size: 12px;
-    font-weight: 900;
-}
-
-.arch-node-name {
-    font-weight: 800;
-    font-size: 13px;
-}
-
-.arch-node-desc {
-    margin-top: 2px;
-    color: #82909d;
-    font-size: 10px;
-}
-
-.arch-status {
-    margin-left: auto;
-    width: 9px;
-    height: 9px;
-    border-radius: 50%;
-    background: #1e8449;
-}
-
-.arch-connector {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    margin: 12px 0;
-    color: #8493a1;
-    font-size: 12px;
-    font-weight: 800;
-}
-
-.arch-footer {
-    text-align: center;
-    margin-top: 18px;
-    color: #82909d;
-    font-size: 11px;
-}
-
-
-/* =========================================================
-   DEPLOYMENT STATUS
-   ========================================================= */
-
-.deployment {
-    display: flex;
-    align-items: center;
-    gap: 18px;
-    padding: 20px;
-    border-radius: 15px;
-    background: #eafaf1;
-    border: 1px solid #a9dfbf;
-}
-
-.deployment.failed {
-    background: #fdedec;
-    border-color: #f1948a;
-}
-
-.deployment-icon {
-    width: 50px;
-    height: 50px;
-    flex-shrink: 0;
-    border-radius: 50%;
-    background: #1e8449;
-    color: white;
-    display: flex;
-    align-items: center;
-    justify-content: center;
     font-size: 22px;
     font-weight: 900;
 }
 
-.deployment.failed .deployment-icon {
-    background: #c0392b;
-}
-
-.deployment-title {
-    font-size: 17px;
-    font-weight: 900;
-}
-
-.deployment-description {
-    color: #66737f;
-    font-size: 12px;
+.section-subtitle {
     margin-top: 4px;
+    color: #64748b;
+    font-size: 13px;
 }
 
 
-/* =========================================================
-   SERVICE SUMMARY
-   ========================================================= */
+/* ============================================================
+   CI/CD FLOW
+   ============================================================ */
 
-.summary-grid {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
+.flow {
+    display: flex;
+    align-items: center;
+    justify-content: center;
     gap: 12px;
-    margin-bottom: 18px;
+    flex-wrap: wrap;
+    padding: 24px;
+    border-radius: 18px;
+    border: 1px solid rgba(148, 163, 184, 0.12);
+    background: rgba(15, 23, 42, 0.66);
 }
 
-.summary-card {
-    padding: 18px;
+.flow-box {
+    min-width: 145px;
+    text-align: center;
+    padding: 17px 20px;
     border-radius: 14px;
-    background: #f8fafc;
-    border: 1px solid #e1e7ed;
+    border: 1px solid rgba(56, 189, 248, 0.22);
+    background: rgba(15, 23, 42, 0.95);
 }
 
-.summary-number {
-    font-size: 29px;
+.flow-title {
+    color: #f8fafc;
+    font-weight: 850;
+}
+
+.flow-status {
+    margin-top: 5px;
+    color: #4ade80;
+    font-size: 11px;
+    font-weight: 800;
+}
+
+.flow-arrow {
+    color: #38bdf8;
+    font-size: 25px;
     font-weight: 900;
 }
 
-.summary-label {
-    color: #82909d;
-    font-size: 11px;
-    margin-top: 3px;
+
+/* ============================================================
+   ACTUAL ARCHITECTURE DIAGRAM
+   ============================================================ */
+
+.architecture-wrapper {
+    overflow-x: auto;
+    padding-bottom: 8px;
+}
+
+.architecture {
+    position: relative;
+    min-width: 1180px;
+    height: 790px;
+    overflow: hidden;
+    border-radius: 24px;
+    border: 1px solid rgba(148, 163, 184, 0.15);
+    background:
+        linear-gradient(rgba(148, 163, 184, 0.035) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(148, 163, 184, 0.035) 1px, transparent 1px),
+        #091321;
+    background-size: 28px 28px;
+}
+
+.architecture svg {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 1;
+}
+
+.connector {
+    fill: none;
+    stroke: #475569;
+    stroke-width: 2.2;
+    opacity: 0.82;
+}
+
+.connector.active {
+    stroke: #38bdf8;
+    stroke-width: 2.8;
+    opacity: 0.95;
+}
+
+.connector.event {
+    stroke: #a78bfa;
+    stroke-dasharray: 7 5;
+}
+
+.connector.metrics {
+    stroke: #22c55e;
+    stroke-dasharray: 6 5;
+}
+
+.arrow-head {
+    fill: #38bdf8;
+}
+
+.arrow-head-event {
+    fill: #a78bfa;
+}
+
+.arrow-head-metrics {
+    fill: #22c55e;
 }
 
 
-/* =========================================================
-   SERVICE CARDS
-   ========================================================= */
+/* ============================================================
+   DIAGRAM GROUPS
+   ============================================================ */
+
+.diagram-group {
+    position: absolute;
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    border-radius: 18px;
+    background: rgba(15, 23, 42, 0.46);
+    z-index: 2;
+}
+
+.group-label {
+    position: absolute;
+    top: 13px;
+    left: 18px;
+    color: #64748b;
+    font-size: 11px;
+    font-weight: 900;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+}
+
+
+/* ============================================================
+   TOP CI/CD NODES
+   ============================================================ */
+
+.diagram-node {
+    position: absolute;
+    z-index: 5;
+    width: 170px;
+    min-height: 82px;
+    padding: 13px;
+    border: 1px solid rgba(148, 163, 184, 0.20);
+    border-radius: 14px;
+    background: rgba(15, 23, 42, 0.96);
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.24);
+}
+
+.diagram-node.primary {
+    border-color: rgba(56, 189, 248, 0.38);
+    background: linear-gradient(
+        135deg,
+        rgba(14, 116, 144, 0.20),
+        rgba(15, 23, 42, 0.98)
+    );
+}
+
+.diagram-node.database {
+    border-color: rgba(251, 191, 36, 0.30);
+}
+
+.diagram-node.messaging {
+    border-color: rgba(167, 139, 250, 0.34);
+}
+
+.diagram-node.monitoring {
+    border-color: rgba(34, 197, 94, 0.30);
+}
+
+.node-title {
+    color: #f8fafc;
+    font-size: 14px;
+    font-weight: 900;
+}
+
+.node-subtitle {
+    margin-top: 3px;
+    color: #64748b;
+    font-size: 10px;
+}
+
+.node-status {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 10px;
+    color: #94a3b8;
+    font-size: 10px;
+    font-weight: 800;
+}
+
+.node-status-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #22c55e;
+    box-shadow: 0 0 9px rgba(34, 197, 94, 0.70);
+}
+
+.node-status-dot.starting {
+    background: #f59e0b;
+    box-shadow: 0 0 9px rgba(245, 158, 11, 0.65);
+}
+
+.node-status-dot.failed {
+    background: #ef4444;
+    box-shadow: 0 0 9px rgba(239, 68, 68, 0.65);
+}
+
+.node-status-dot.running {
+    background: #38bdf8;
+    box-shadow: 0 0 9px rgba(56, 189, 248, 0.65);
+}
+
+
+/* ============================================================
+   GROUP POSITIONS
+   ============================================================ */
+
+.application-group {
+    left: 35px;
+    top: 270px;
+    width: 535px;
+    height: 285px;
+}
+
+.data-group {
+    left: 595px;
+    top: 270px;
+    width: 550px;
+    height: 285px;
+}
+
+.observability-group {
+    left: 245px;
+    top: 585px;
+    width: 700px;
+    height: 170px;
+}
+
+
+/* ============================================================
+   NODE POSITIONS
+   ============================================================ */
+
+.github {
+    left: 505px;
+    top: 25px;
+}
+
+.jenkins {
+    left: 505px;
+    top: 135px;
+}
+
+.compose {
+    left: 505px;
+    top: 225px;
+    width: 170px;
+}
+
+.nginx {
+    left: 35px;
+    top: 70px;
+}
+
+.backend {
+    left: 210px;
+    top: 70px;
+}
+
+.react {
+    left: 385px;
+    top: 70px;
+}
+
+.mysql {
+    left: 35px;
+    top: 70px;
+}
+
+.redis {
+    left: 200px;
+    top: 70px;
+}
+
+.kafka {
+    left: 365px;
+    top: 70px;
+}
+
+.kafka-connect {
+    left: 365px;
+    top: 180px;
+}
+
+.prometheus {
+    left: 190px;
+    top: 65px;
+}
+
+.grafana {
+    left: 370px;
+    top: 65px;
+}
+
+.cadvisor {
+    left: 10px;
+    top: 65px;
+}
+
+
+/* ============================================================
+   DIAGRAM LEGEND
+   ============================================================ */
+
+.diagram-legend {
+    position: absolute;
+    right: 20px;
+    top: 20px;
+    z-index: 8;
+    display: flex;
+    gap: 14px;
+    align-items: center;
+    padding: 9px 12px;
+    border-radius: 10px;
+    background: rgba(2, 6, 23, 0.78);
+    border: 1px solid rgba(148, 163, 184, 0.12);
+    font-size: 10px;
+    color: #94a3b8;
+}
+
+.legend-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.legend-line {
+    width: 22px;
+    height: 2px;
+    background: #38bdf8;
+}
+
+.legend-line.event {
+    background: #a78bfa;
+}
+
+.legend-line.metrics {
+    background: #22c55e;
+}
+
+
+/* ============================================================
+   SERVICE HEALTH
+   ============================================================ */
+
+.health-summary {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 14px;
+}
+
+.metric-card {
+    padding: 20px;
+    border-radius: 16px;
+    border: 1px solid rgba(148, 163, 184, 0.13);
+    background: rgba(15, 23, 42, 0.72);
+}
+
+.metric-number {
+    font-size: 28px;
+    font-weight: 950;
+}
+
+.metric-label {
+    margin-top: 5px;
+    color: #64748b;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
 
 .service-grid {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
-    gap: 14px;
+    gap: 15px;
+    margin-top: 15px;
 }
 
 .service-card {
     padding: 18px;
-    border-radius: 15px;
-    border: 1px solid #e1e7ed;
-    border-top: 4px solid #8493a1;
-    background: white;
+    border-radius: 17px;
+    border: 1px solid rgba(148, 163, 184, 0.14);
+    background: rgba(15, 23, 42, 0.76);
 }
 
 .service-card.healthy {
-    border-top-color: #1e8449;
+    border-color: rgba(34, 197, 94, 0.25);
 }
 
 .service-card.running {
-    border-top-color: #2471a3;
+    border-color: rgba(56, 189, 248, 0.25);
 }
 
 .service-card.starting {
-    border-top-color: #b9770e;
+    border-color: rgba(245, 158, 11, 0.28);
 }
 
 .service-card.failed {
-    border-top-color: #c0392b;
+    border-color: rgba(239, 68, 68, 0.30);
 }
 
 .service-card-top {
     display: flex;
     align-items: center;
-    gap: 10px;
-}
-
-.service-pictogram {
-    width: 38px;
-    height: 38px;
-    border-radius: 11px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 18px;
-    font-weight: 900;
-    background: #f2f4f6;
-}
-
-.service-pictogram.healthy {
-    background: #eafaf1;
-    color: #1e8449;
-}
-
-.service-pictogram.running {
-    background: #eaf2f8;
-    color: #2471a3;
-}
-
-.service-pictogram.starting {
-    background: #fef5e7;
-    color: #b9770e;
-}
-
-.service-pictogram.failed {
-    background: #fdedec;
-    color: #c0392b;
-}
-
-.service-card-name {
-    font-size: 15px;
-    font-weight: 900;
-    flex: 1;
-}
-
-.service-status-pill {
-    padding: 5px 8px;
-    border-radius: 20px;
-    font-size: 9px;
-    font-weight: 900;
-    letter-spacing: .5px;
-}
-
-.service-status-pill.healthy {
-    background: #eafaf1;
-    color: #1e8449;
-}
-
-.service-status-pill.running {
-    background: #eaf2f8;
-    color: #2471a3;
-}
-
-.service-status-pill.starting {
-    background: #fef5e7;
-    color: #b9770e;
-}
-
-.service-status-pill.failed {
-    background: #fdedec;
-    color: #c0392b;
-}
-
-.service-detail {
-    margin-top: 12px;
-    font-size: 11px;
-    color: #6c7a86;
-}
-
-.service-meta {
-    margin-top: 13px;
-    padding-top: 11px;
-    border-top: 1px solid #edf0f3;
-    display: grid;
-    gap: 7px;
-}
-
-.service-meta div {
-    display: flex;
-    justify-content: space-between;
     gap: 12px;
 }
 
-.service-meta span {
-    color: #9aa5ae;
+.service-icon {
+    width: 38px;
+    height: 38px;
+    display: grid;
+    place-items: center;
+    border-radius: 10px;
+    background: rgba(56, 189, 248, 0.10);
+    color: #7dd3fc;
     font-size: 10px;
+    font-weight: 950;
 }
 
-.service-meta strong {
-    max-width: 68%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    text-align: right;
-    font-size: 10px;
-}
-
-
-/* =========================================================
-   BUILD ACTIVITY
-   ========================================================= */
-
-.timeline {
-    position: relative;
-    margin-left: 10px;
-    padding-left: 30px;
-    border-left: 2px solid #dce3e9;
-}
-
-.timeline-item {
-    position: relative;
-    padding: 0 0 22px 12px;
-}
-
-.timeline-item:last-child {
-    padding-bottom: 0;
-}
-
-.timeline-dot {
-    position: absolute;
-    left: -40px;
-    top: 1px;
-    width: 16px;
-    height: 16px;
-    border-radius: 50%;
-    background: #1e8449;
-    border: 3px solid white;
-    box-shadow: 0 0 0 2px #a9dfbf;
-}
-
-.timeline-title {
-    font-size: 13px;
+.service-name {
     font-weight: 900;
 }
 
-.timeline-description {
-    color: #74818c;
-    font-size: 11px;
+.service-description {
     margin-top: 3px;
+    color: #64748b;
+    font-size: 11px;
 }
 
-.timeline-code {
-    display: inline-block;
-    margin-top: 5px;
-    padding: 4px 7px;
-    border-radius: 5px;
-    background: #f1f3f5;
-    color: #566573;
-    font-family: monospace;
+.service-card-status {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin-top: 17px;
+    color: #86efac;
+    font-size: 11px;
+    font-weight: 900;
+}
+
+.service-card.running .service-card-status {
+    color: #7dd3fc;
+}
+
+.service-card.starting .service-card-status {
+    color: #fbbf24;
+}
+
+.service-card.failed .service-card-status {
+    color: #f87171;
+}
+
+.status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #22c55e;
+}
+
+.service-card.running .status-dot {
+    background: #38bdf8;
+}
+
+.service-card.starting .status-dot {
+    background: #f59e0b;
+}
+
+.service-card.failed .status-dot {
+    background: #ef4444;
+}
+
+.service-card-meta {
+    margin-top: 10px;
+    color: #475569;
     font-size: 10px;
 }
 
 
-/* =========================================================
+/* ============================================================
    FOOTER
-   ========================================================= */
+   ============================================================ */
 
 .footer {
+    margin-top: 32px;
+    padding-top: 20px;
+    border-top: 1px solid rgba(148, 163, 184, 0.10);
+    color: #475569;
     text-align: center;
-    padding: 18px;
-    color: #8a969f;
     font-size: 11px;
 }
 
 
-/* =========================================================
+/* ============================================================
    RESPONSIVE
-   ========================================================= */
+   ============================================================ */
 
-@media (max-width: 1100px) {
-
-    .info-grid {
-        grid-template-columns: repeat(2, 1fr);
-    }
-
-    .summary-grid {
-        grid-template-columns: repeat(2, 1fr);
-    }
-
-    .service-grid {
-        grid-template-columns: repeat(2, 1fr);
-    }
-
-    .arch-layers {
-        grid-template-columns: 1fr;
-    }
-}
-
-@media (max-width: 800px) {
-
-    .container {
-        padding: 14px;
-    }
-
-    .hero-row {
-        flex-direction: column;
-    }
-
-    .flow {
-        flex-direction: column;
-        align-items: center;
-    }
-
-    .flow-node {
-        width: 100%;
-        max-width: 350px;
-    }
-
-    .flow-arrow {
-        height: 35px;
-        width: 35px;
-        transform: rotate(90deg);
-    }
+@media (max-width: 900px) {
 
     .info-grid,
-    .summary-grid,
+    .health-summary {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
     .service-grid {
         grid-template-columns: 1fr;
     }
+
 }
 
 </style>
+
 </head>
 
 
@@ -1361,176 +1296,132 @@ body {
 <div class="container">
 
 
-<!-- =========================================================
-     HERO
-     ========================================================= -->
+    <!-- ========================================================
+         HERO
+         ======================================================== -->
 
-<div class="hero">
+    <section class="hero">
 
-    <div class="hero-content">
+        <div class="eyebrow">
+            E-Commerce DevOps Platform
+        </div>
 
-        <div class="hero-row">
+        <h1>
+            CI/CD Control Center
+        </h1>
 
-            <div>
+        <div class="hero-subtitle">
+            GitHub → Jenkins → Docker Compose → Service Verification
+        </div>
 
-                <div class="eyebrow">
-                    E-Commerce DevOps Project
-                </div>
+        <div class="build-pill">
+            <span class="dot"></span>
+            BUILD #__BUILD_NUMBER__ • SUCCESS
+        </div>
 
-                <h1>
-                    CI/CD Control Center
-                </h1>
+    </section>
 
-                <div class="hero-description">
-                    Jenkins → Docker Build → Deployment → Service Verification
-                </div>
 
+    <!-- ========================================================
+         BUILD INFORMATION
+         ======================================================== -->
+
+    <section class="info-grid">
+
+        <div class="info-card">
+
+            <div class="info-label">
+                Git Commit
             </div>
 
-
-            <div class="success-badge">
-
-                <span class="success-dot"></span>
-
-                BUILD #__BUILD_NUMBER__ • SUCCESS
-
+            <div class="info-value">
+                __GIT_COMMIT__
             </div>
 
         </div>
 
-    </div>
 
-</div>
+        <div class="info-card">
 
+            <div class="info-label">
+                Git Branch
+            </div>
 
-<!-- =========================================================
-     BUILD INFORMATION
-     ========================================================= -->
+            <div class="info-value">
+                __GIT_BRANCH__
+            </div>
 
-<div class="info-grid">
-
-    <div class="info-card">
-
-        <div class="info-label">
-            Git Commit
         </div>
 
-        <div class="info-value">
-            __GIT_COMMIT__
+
+        <div class="info-card">
+
+            <div class="info-label">
+                Jenkins Build
+            </div>
+
+            <div class="info-value">
+                #__BUILD_NUMBER__
+            </div>
+
         </div>
 
-        <div class="info-sub">
-            Source revision deployed by this build
+
+        <div class="info-card">
+
+            <div class="info-label">
+                Platform
+            </div>
+
+            <div class="info-value">
+                Docker Compose
+            </div>
+
         </div>
 
-    </div>
+    </section>
 
 
-    <div class="info-card">
+    <!-- ========================================================
+         CI/CD PIPELINE FLOW
+         ======================================================== -->
 
-        <div class="info-label">
-            Git Branch
+    <section class="section">
+
+        <div class="section-header">
+
+            <div class="section-title">
+                CI/CD Pipeline Flow
+            </div>
+
+            <div class="section-subtitle">
+                Jenkins execution path for the current deployment
+            </div>
+
         </div>
 
-        <div class="info-value">
-            __GIT_BRANCH__
-        </div>
 
-        <div class="info-sub">
-            Jenkins checkout source
-        </div>
+        <div class="flow">
 
-    </div>
-
-
-    <div class="info-card">
-
-        <div class="info-label">
-            Build
-        </div>
-
-        <div class="info-value">
-            #__BUILD_NUMBER__
-        </div>
-
-        <div class="info-sub">
-            Jenkins pipeline execution
-        </div>
-
-    </div>
-
-
-    <div class="info-card">
-
-        <div class="info-label">
-            Platform
-        </div>
-
-        <div class="info-value">
-            Docker Compose
-        </div>
-
-        <div class="info-sub">
-            __TOTAL_SERVICES__ services deployed
-        </div>
-
-    </div>
-
-</div>
-
-
-<!-- =========================================================
-     CI/CD FLOW
-     ========================================================= -->
-
-<div class="section">
-
-    <div class="section-heading">
-        <div class="section-title">
-            CI/CD Pipeline Flow
-        </div>
-    </div>
-
-    <div class="section-subtitle">
-        What happened to the committed code during this Jenkins build
-    </div>
-
-
-    <div class="flow">
-
-        <div class="flow-node">
-
-            <div class="flow-card">
-
-                <div class="flow-icon">
-                    G
-                </div>
+            <div class="flow-box">
 
                 <div class="flow-title">
                     GitHub
                 </div>
 
                 <div class="flow-status">
-                    COMMIT __GIT_COMMIT__
+                    COMMIT
                 </div>
 
             </div>
 
-        </div>
+
+            <div class="flow-arrow">
+                →
+            </div>
 
 
-        <div class="flow-arrow">
-            <span>→</span>
-        </div>
-
-
-        <div class="flow-node">
-
-            <div class="flow-card">
-
-                <div class="flow-icon">
-                    J
-                </div>
+            <div class="flow-box">
 
                 <div class="flow-title">
                     Jenkins
@@ -1542,21 +1433,13 @@ body {
 
             </div>
 
-        </div>
+
+            <div class="flow-arrow">
+                →
+            </div>
 
 
-        <div class="flow-arrow">
-            <span>→</span>
-        </div>
-
-
-        <div class="flow-node">
-
-            <div class="flow-card">
-
-                <div class="flow-icon">
-                    ✓
-                </div>
+            <div class="flow-box">
 
                 <div class="flow-title">
                     Validate
@@ -1568,21 +1451,13 @@ body {
 
             </div>
 
-        </div>
+
+            <div class="flow-arrow">
+                →
+            </div>
 
 
-        <div class="flow-arrow">
-            <span>→</span>
-        </div>
-
-
-        <div class="flow-node">
-
-            <div class="flow-card">
-
-                <div class="flow-icon">
-                    B
-                </div>
+            <div class="flow-box">
 
                 <div class="flow-title">
                     Docker Build
@@ -1594,21 +1469,13 @@ body {
 
             </div>
 
-        </div>
+
+            <div class="flow-arrow">
+                →
+            </div>
 
 
-        <div class="flow-arrow">
-            <span>→</span>
-        </div>
-
-
-        <div class="flow-node">
-
-            <div class="flow-card">
-
-                <div class="flow-icon">
-                    D
-                </div>
+            <div class="flow-box">
 
                 <div class="flow-title">
                     Deploy
@@ -1620,21 +1487,13 @@ body {
 
             </div>
 
-        </div>
+
+            <div class="flow-arrow">
+                →
+            </div>
 
 
-        <div class="flow-arrow">
-            <span>→</span>
-        </div>
-
-
-        <div class="flow-node">
-
-            <div class="flow-card">
-
-                <div class="flow-icon">
-                    ✓
-                </div>
+            <div class="flow-box">
 
                 <div class="flow-title">
                     Verify
@@ -1648,51 +1507,624 @@ body {
 
         </div>
 
-    </div>
-
-</div>
+    </section>
 
 
-<!-- =========================================================
-     ARCHITECTURE
-     ========================================================= -->
+    <!-- ========================================================
+         ACTUAL ARCHITECTURE
+         ======================================================== -->
 
-<div class="section">
+    <section class="section">
 
-    <div class="section-heading">
-        <div class="section-title">
-            E-Commerce Architecture
+        <div class="section-header">
+
+            <div class="section-title">
+                E-Commerce Architecture
+            </div>
+
+            <div class="section-subtitle">
+                Live deployment topology — application, data/event and observability paths
+            </div>
+
         </div>
-    </div>
-
-    <div class="section-subtitle">
-        Visual topology of the application, data, messaging and observability layers
-    </div>
 
 
-    <div class="architecture-canvas">
+        <div class="architecture-wrapper">
 
-        <div class="arch-flow">
+            <div class="architecture">
 
 
-            <!-- SOURCE -->
+                <!-- ==================================================
+                     SVG CONNECTOR LAYER
+                     ================================================== -->
 
-            <div class="arch-source">
+                <svg
+                    viewBox="0 0 1180 790"
+                    preserveAspectRatio="none"
+                    xmlns="http://www.w3.org/2000/svg"
+                >
 
-                <div class="arch-source-box">
+                    <defs>
 
-                    <div class="arch-source-icon">
-                        G
+                        <marker
+                            id="arrowBlue"
+                            markerWidth="9"
+                            markerHeight="9"
+                            refX="7"
+                            refY="3.5"
+                            orient="auto"
+                        >
+                            <polygon
+                                points="0 0, 8 3.5, 0 7"
+                                class="arrow-head"
+                            />
+                        </marker>
+
+
+                        <marker
+                            id="arrowPurple"
+                            markerWidth="9"
+                            markerHeight="9"
+                            refX="7"
+                            refY="3.5"
+                            orient="auto"
+                        >
+                            <polygon
+                                points="0 0, 8 3.5, 0 7"
+                                class="arrow-head-event"
+                            />
+                        </marker>
+
+
+                        <marker
+                            id="arrowGreen"
+                            markerWidth="9"
+                            markerHeight="9"
+                            refX="7"
+                            refY="3.5"
+                            orient="auto"
+                        >
+                            <polygon
+                                points="0 0, 8 3.5, 0 7"
+                                class="arrow-head-metrics"
+                            />
+                        </marker>
+
+                    </defs>
+
+
+                    <!-- =============================================
+                         CI/CD PATH
+                         ============================================= -->
+
+                    <path
+                        d="M590 108 L590 135"
+                        class="connector active"
+                        marker-end="url(#arrowBlue)"
+                    />
+
+                    <path
+                        d="M590 218 L590 225"
+                        class="connector active"
+                        marker-end="url(#arrowBlue)"
+                    />
+
+                    <path
+                        d="M590 307 L590 335"
+                        class="connector active"
+                        marker-end="url(#arrowBlue)"
+                    />
+
+
+                    <!-- =============================================
+                         COMPOSE → APPLICATION SERVICES
+                         ============================================= -->
+
+                    <path
+                        d="M590 315
+                           L590 330
+                           L150 330
+                           L150 340"
+                        class="connector active"
+                        marker-end="url(#arrowBlue)"
+                    />
+
+                    <path
+                        d="M590 315
+                           L590 330
+                           L325 330
+                           L325 340"
+                        class="connector active"
+                        marker-end="url(#arrowBlue)"
+                    />
+
+                    <path
+                        d="M590 315
+                           L590 330
+                           L500 330
+                           L500 340"
+                        class="connector active"
+                        marker-end="url(#arrowBlue)"
+                    />
+
+
+                    <!-- =============================================
+                         COMPOSE → DATA SERVICES
+                         ============================================= -->
+
+                    <path
+                        d="M590 315
+                           L590 330
+                           L665 330
+                           L665 340"
+                        class="connector active"
+                        marker-end="url(#arrowBlue)"
+                    />
+
+                    <path
+                        d="M590 315
+                           L590 330
+                           L830 330
+                           L830 340"
+                        class="connector active"
+                        marker-end="url(#arrowBlue)"
+                    />
+
+                    <path
+                        d="M590 315
+                           L590 330
+                           L995 330
+                           L995 340"
+                        class="connector active"
+                        marker-end="url(#arrowBlue)"
+                    />
+
+
+                    <!-- =============================================
+                         COMPOSE → OBSERVABILITY
+                         ============================================= -->
+
+                    <path
+                        d="M590 315
+                           L590 625
+                           L470 625"
+                        class="connector active"
+                        marker-end="url(#arrowBlue)"
+                    />
+
+
+                    <!-- =============================================
+                         APPLICATION FLOW
+                         React → Nginx → Backend
+                         ============================================= -->
+
+                    <path
+                        d="M500 425 L325 425"
+                        class="connector"
+                        marker-end="url(#arrowBlue)"
+                    />
+
+                    <path
+                        d="M325 425 L150 425"
+                        class="connector"
+                        marker-end="url(#arrowBlue)"
+                    />
+
+
+                    <!-- =============================================
+                         BACKEND → DATA
+                         ============================================= -->
+
+                    <path
+                        d="M235 455
+                           L235 500
+                           L630 500"
+                        class="connector"
+                        marker-end="url(#arrowBlue)"
+                    />
+
+                    <path
+                        d="M235 455
+                           L235 520
+                           L795 520
+                           L795 455"
+                        class="connector"
+                        marker-end="url(#arrowBlue)"
+                    />
+
+
+                    <!-- =============================================
+                         KAFKA → KAFKA CONNECT
+                         ============================================= -->
+
+                    <path
+                        d="M995 455
+                           L995 500
+                           L995 500
+                           L995 490"
+                        class="connector event"
+                        marker-end="url(#arrowPurple)"
+                    />
+
+
+                    <!-- =============================================
+                         KAFKA CONNECT → MYSQL / CDC
+                         ============================================= -->
+
+                    <path
+                        d="M930 515
+                           L665 515
+                           L665 455"
+                        class="connector event"
+                        marker-end="url(#arrowPurple)"
+                    />
+
+
+                    <!-- =============================================
+                         CADVISOR → PROMETHEUS
+                         ============================================= -->
+
+                    <path
+                        d="M430 680 L500 680"
+                        class="connector metrics"
+                        marker-end="url(#arrowGreen)"
+                    />
+
+
+                    <!-- =============================================
+                         PROMETHEUS → GRAFANA
+                         ============================================= -->
+
+                    <path
+                        d="M660 680 L730 680"
+                        class="connector metrics"
+                        marker-end="url(#arrowGreen)"
+                    />
+
+                </svg>
+
+
+                <!-- ==================================================
+                     LEGEND
+                     ================================================== -->
+
+                <div class="diagram-legend">
+
+                    <div class="legend-item">
+                        <span class="legend-line"></span>
+                        Application / deployment
                     </div>
 
-                    <div>
+                    <div class="legend-item">
+                        <span class="legend-line event"></span>
+                        Event / CDC
+                    </div>
 
-                        <div class="arch-source-title">
-                            GitHub
+                    <div class="legend-item">
+                        <span class="legend-line metrics"></span>
+                        Metrics
+                    </div>
+
+                </div>
+
+
+                <!-- ==================================================
+                     GITHUB
+                     ================================================== -->
+
+                <div class="diagram-node primary github">
+
+                    <div class="node-title">
+                        GitHub
+                    </div>
+
+                    <div class="node-subtitle">
+                        e-commerce repository
+                    </div>
+
+                    <div class="node-status">
+
+                        <span class="node-status-dot running"></span>
+
+                        __GIT_BRANCH__
+
+                    </div>
+
+                </div>
+
+
+                <!-- ==================================================
+                     JENKINS
+                     ================================================== -->
+
+                <div class="diagram-node primary jenkins">
+
+                    <div class="node-title">
+                        Jenkins CI/CD
+                    </div>
+
+                    <div class="node-subtitle">
+                        Pipeline Controller
+                    </div>
+
+                    <div class="node-status">
+
+                        <span class="node-status-dot running"></span>
+
+                        BUILD #__BUILD_NUMBER__
+
+                    </div>
+
+                </div>
+
+
+                <!-- ==================================================
+                     DOCKER COMPOSE
+                     ================================================== -->
+
+                <div class="diagram-node primary compose">
+
+                    <div class="node-title">
+                        Docker Compose
+                    </div>
+
+                    <div class="node-subtitle">
+                        Container Orchestration
+                    </div>
+
+                    <div class="node-status">
+
+                        <span class="node-status-dot running"></span>
+
+                        __RUNNING_SERVICES__/__TOTAL_SERVICES__ RUNNING
+
+                    </div>
+
+                </div>
+
+
+                <!-- ==================================================
+                     APPLICATION GROUP
+                     ================================================== -->
+
+                <div class="diagram-group application-group">
+
+                    <div class="group-label">
+                        APPLICATION
+                    </div>
+
+
+                    <div class="diagram-node nginx">
+
+                        <div class="node-title">
+                            Nginx
                         </div>
 
-                        <div class="arch-source-sub">
-                            Commit __GIT_COMMIT__
+                        <div class="node-subtitle">
+                            Reverse Proxy
+                        </div>
+
+                        <div class="node-status">
+
+                            <span class="node-status-dot __NGINX_STATUS_CLASS__"></span>
+
+                            __NGINX_STATUS__
+
+                        </div>
+
+                    </div>
+
+
+                    <div class="diagram-node backend">
+
+                        <div class="node-title">
+                            Node / Express
+                        </div>
+
+                        <div class="node-subtitle">
+                            Backend API
+                        </div>
+
+                        <div class="node-status">
+
+                            <span class="node-status-dot __BACKEND_STATUS_CLASS__"></span>
+
+                            __BACKEND_STATUS__
+
+                        </div>
+
+                    </div>
+
+
+                    <div class="diagram-node react">
+
+                        <div class="node-title">
+                            React
+                        </div>
+
+                        <div class="node-subtitle">
+                            Frontend
+                        </div>
+
+                        <div class="node-status">
+
+                            <span class="node-status-dot running"></span>
+
+                            APPLICATION
+
+                        </div>
+
+                    </div>
+
+                </div>
+
+
+                <!-- ==================================================
+                     DATA & EVENTS GROUP
+                     ================================================== -->
+
+                <div class="diagram-group data-group">
+
+                    <div class="group-label">
+                        DATA & EVENTS
+                    </div>
+
+
+                    <div class="diagram-node database mysql">
+
+                        <div class="node-title">
+                            MySQL
+                        </div>
+
+                        <div class="node-subtitle">
+                            Application Database
+                        </div>
+
+                        <div class="node-status">
+
+                            <span class="node-status-dot __MYSQL_STATUS_CLASS__"></span>
+
+                            __MYSQL_STATUS__
+
+                        </div>
+
+                    </div>
+
+
+                    <div class="diagram-node database redis">
+
+                        <div class="node-title">
+                            Redis
+                        </div>
+
+                        <div class="node-subtitle">
+                            Cache Layer
+                        </div>
+
+                        <div class="node-status">
+
+                            <span class="node-status-dot __REDIS_STATUS_CLASS__"></span>
+
+                            __REDIS_STATUS__
+
+                        </div>
+
+                    </div>
+
+
+                    <div class="diagram-node messaging kafka">
+
+                        <div class="node-title">
+                            Kafka
+                        </div>
+
+                        <div class="node-subtitle">
+                            Event Streaming
+                        </div>
+
+                        <div class="node-status">
+
+                            <span class="node-status-dot __KAFKA_STATUS_CLASS__"></span>
+
+                            __KAFKA_STATUS__
+
+                        </div>
+
+                    </div>
+
+
+                    <div class="diagram-node messaging kafka-connect">
+
+                        <div class="node-title">
+                            Kafka Connect
+                        </div>
+
+                        <div class="node-subtitle">
+                            Debezium Integration
+                        </div>
+
+                        <div class="node-status">
+
+                            <span class="node-status-dot __KAFKA_CONNECT_STATUS_CLASS__"></span>
+
+                            __KAFKA_CONNECT_STATUS__
+
+                        </div>
+
+                    </div>
+
+                </div>
+
+
+                <!-- ==================================================
+                     OBSERVABILITY GROUP
+                     ================================================== -->
+
+                <div class="diagram-group observability-group">
+
+                    <div class="group-label">
+                        OBSERVABILITY
+                    </div>
+
+
+                    <div class="diagram-node monitoring cadvisor">
+
+                        <div class="node-title">
+                            cAdvisor
+                        </div>
+
+                        <div class="node-subtitle">
+                            Container Metrics
+                        </div>
+
+                        <div class="node-status">
+
+                            <span class="node-status-dot __CADVISOR_STATUS_CLASS__"></span>
+
+                            __CADVISOR_STATUS__
+
+                        </div>
+
+                    </div>
+
+
+                    <div class="diagram-node monitoring prometheus">
+
+                        <div class="node-title">
+                            Prometheus
+                        </div>
+
+                        <div class="node-subtitle">
+                            Metrics Collection
+                        </div>
+
+                        <div class="node-status">
+
+                            <span class="node-status-dot __PROMETHEUS_STATUS_CLASS__"></span>
+
+                            __PROMETHEUS_STATUS__
+
+                        </div>
+
+                    </div>
+
+
+                    <div class="diagram-node monitoring grafana">
+
+                        <div class="node-title">
+                            Grafana
+                        </div>
+
+                        <div class="node-subtitle">
+                            Monitoring Dashboard
+                        </div>
+
+                        <div class="node-status">
+
+                            <span class="node-status-dot __GRAFANA_STATUS_CLASS__"></span>
+
+                            __GRAFANA_STATUS__
+
                         </div>
 
                     </div>
@@ -1701,564 +2133,224 @@ body {
 
             </div>
 
+        </div>
 
-            <div class="arch-down"></div>
+    </section>
 
 
-            <!-- JENKINS -->
+    <!-- ========================================================
+         DEPLOYMENT STATUS
+         ======================================================== -->
 
-            <div class="jenkins-box">
+    <section class="section">
 
-                <div class="jenkins-title">
-                    Jenkins CI/CD
-                </div>
+        <div class="section-header">
 
-                <div class="jenkins-sub">
-                    Build #__BUILD_NUMBER__ → Docker Compose Deployment
-                </div>
-
+            <div class="section-title">
+                Deployment Status
             </div>
 
+            <div class="section-subtitle">
+                Current Docker Compose deployment state
+            </div>
 
-            <div class="arch-down"></div>
-
-
-            <!-- THREE LAYERS -->
-
-            <div class="arch-layers">
+        </div>
 
 
-                <!-- APPLICATION -->
+        <div class="health-summary">
 
-                <div class="arch-layer">
+            <div class="metric-card">
 
-                    <div class="layer-title">
-                        Application Layer
-                    </div>
-
-                    <div class="arch-nodes">
-
-                        <div class="arch-node">
-
-                            <div class="arch-node-icon">
-                                NG
-                            </div>
-
-                            <div>
-                                <div class="arch-node-name">Nginx</div>
-                                <div class="arch-node-desc">Reverse Proxy</div>
-                            </div>
-
-                            <div class="arch-status"></div>
-
-                        </div>
-
-
-                        <div class="arch-connector">
-                            ↓ HTTP
-                        </div>
-
-
-                        <div class="arch-node">
-
-                            <div class="arch-node-icon">
-                                API
-                            </div>
-
-                            <div>
-                                <div class="arch-node-name">Node / Express</div>
-                                <div class="arch-node-desc">Backend API</div>
-                            </div>
-
-                            <div class="arch-status"></div>
-
-                        </div>
-
-
-                        <div class="arch-connector">
-                            ↓
-                        </div>
-
-
-                        <div class="arch-node">
-
-                            <div class="arch-node-icon">
-                                UI
-                            </div>
-
-                            <div>
-                                <div class="arch-node-name">React</div>
-                                <div class="arch-node-desc">Frontend</div>
-                            </div>
-
-                            <div class="arch-status"></div>
-
-                        </div>
-
-                    </div>
-
+                <div class="metric-number">
+                    __TOTAL_SERVICES__
                 </div>
 
-
-                <!-- DATA -->
-
-                <div class="arch-layer">
-
-                    <div class="layer-title">
-                        Data & Messaging
-                    </div>
-
-                    <div class="arch-nodes">
-
-                        <div class="arch-node">
-
-                            <div class="arch-node-icon">
-                                DB
-                            </div>
-
-                            <div>
-                                <div class="arch-node-name">MySQL</div>
-                                <div class="arch-node-desc">Application Database</div>
-                            </div>
-
-                            <div class="arch-status"></div>
-
-                        </div>
-
-
-                        <div class="arch-node">
-
-                            <div class="arch-node-icon">
-                                R
-                            </div>
-
-                            <div>
-                                <div class="arch-node-name">Redis</div>
-                                <div class="arch-node-desc">Cache Layer</div>
-                            </div>
-
-                            <div class="arch-status"></div>
-
-                        </div>
-
-
-                        <div class="arch-node">
-
-                            <div class="arch-node-icon">
-                                K
-                            </div>
-
-                            <div>
-                                <div class="arch-node-name">Kafka</div>
-                                <div class="arch-node-desc">Event Streaming</div>
-                            </div>
-
-                            <div class="arch-status"></div>
-
-                        </div>
-
-
-                        <div class="arch-node">
-
-                            <div class="arch-node-icon">
-                                DC
-                            </div>
-
-                            <div>
-                                <div class="arch-node-name">Kafka Connect</div>
-                                <div class="arch-node-desc">Debezium Integration</div>
-                            </div>
-
-                            <div class="arch-status"></div>
-
-                        </div>
-
-                    </div>
-
-                </div>
-
-
-                <!-- OBSERVABILITY -->
-
-                <div class="arch-layer">
-
-                    <div class="layer-title">
-                        Observability
-                    </div>
-
-                    <div class="arch-nodes">
-
-                        <div class="arch-node">
-
-                            <div class="arch-node-icon">
-                                P
-                            </div>
-
-                            <div>
-                                <div class="arch-node-name">Prometheus</div>
-                                <div class="arch-node-desc">Metrics Collection</div>
-                            </div>
-
-                            <div class="arch-status"></div>
-
-                        </div>
-
-
-                        <div class="arch-node">
-
-                            <div class="arch-node-icon">
-                                G
-                            </div>
-
-                            <div>
-                                <div class="arch-node-name">Grafana</div>
-                                <div class="arch-node-desc">Monitoring Dashboard</div>
-                            </div>
-
-                            <div class="arch-status"></div>
-
-                        </div>
-
-
-                        <div class="arch-node">
-
-                            <div class="arch-node-icon">
-                                CA
-                            </div>
-
-                            <div>
-                                <div class="arch-node-name">cAdvisor</div>
-                                <div class="arch-node-desc">Container Metrics</div>
-                            </div>
-
-                            <div class="arch-status"></div>
-
-                        </div>
-
-                    </div>
-
+                <div class="metric-label">
+                    Total Services
                 </div>
 
             </div>
 
 
-            <div class="arch-footer">
-                All components above are deployed and managed through Docker Compose.
+            <div class="metric-card">
+
+                <div class="metric-number">
+                    __HEALTHY_SERVICES__
+                </div>
+
+                <div class="metric-label">
+                    Healthchecks Passing
+                </div>
+
+            </div>
+
+
+            <div class="metric-card">
+
+                <div class="metric-number">
+                    __RUNNING_SERVICES__
+                </div>
+
+                <div class="metric-label">
+                    Running
+                </div>
+
+            </div>
+
+
+            <div class="metric-card">
+
+                <div class="metric-number">
+                    __FAILED_SERVICES__
+                </div>
+
+                <div class="metric-label">
+                    Failed
+                </div>
+
+            </div>
+
+
+            <div class="metric-card">
+
+                <div class="metric-number">
+                    __NO_HEALTHCHECK_SERVICES__
+                </div>
+
+                <div class="metric-label">
+                    Running Without Healthcheck
+                </div>
+
             </div>
 
         </div>
+
+    </section>
+
+
+    <!-- ========================================================
+         SERVICE HEALTH
+         ======================================================== -->
+
+    <section class="section">
+
+        <div class="section-header">
+
+            <div class="section-title">
+                Service Health
+            </div>
+
+            <div class="section-subtitle">
+                Live status collected directly from Docker containers
+            </div>
+
+        </div>
+
+
+        <div class="service-grid">
+
+            __SERVICE_CARDS__
+
+        </div>
+
+    </section>
+
+
+    <!-- ========================================================
+         FOOTER
+         ======================================================== -->
+
+    <div class="footer">
+
+        Generated by Jenkins Build #__BUILD_NUMBER__
+        •
+        __GENERATED__
 
     </div>
-
-</div>
-
-
-<!-- =========================================================
-     DEPLOYMENT STATUS
-     ========================================================= -->
-
-<div class="section">
-
-    <div class="section-heading">
-        <div class="section-title">
-            Deployment Status
-        </div>
-    </div>
-
-    <div class="deployment __DEPLOYMENT_CLASS__">
-
-        <div class="deployment-icon">
-            ✓
-        </div>
-
-        <div>
-
-            <div class="deployment-title">
-                __DEPLOYMENT_STATUS__
-            </div>
-
-            <div class="deployment-description">
-                __DEPLOYMENT_DESCRIPTION__
-            </div>
-
-        </div>
-
-    </div>
-
-</div>
-
-
-<!-- =========================================================
-     SERVICE HEALTH
-     ========================================================= -->
-
-<div class="section">
-
-    <div class="section-heading">
-        <div class="section-title">
-            Service Health
-        </div>
-    </div>
-
-    <div class="section-subtitle">
-        Live Docker Compose state captured after deployment verification
-    </div>
-
-
-    <div class="summary-grid">
-
-        <div class="summary-card">
-            <div class="summary-number">
-                __TOTAL_SERVICES__
-            </div>
-            <div class="summary-label">
-                Total Services
-            </div>
-        </div>
-
-
-        <div class="summary-card">
-            <div class="summary-number">
-                __HEALTHY_SERVICES__
-            </div>
-            <div class="summary-label">
-                Healthchecks Passing
-            </div>
-        </div>
-
-
-        <div class="summary-card">
-            <div class="summary-number">
-                __RUNNING_SERVICES__
-            </div>
-            <div class="summary-label">
-                Running
-            </div>
-        </div>
-
-
-        <div class="summary-card">
-            <div class="summary-number">
-                __FAILED_SERVICES__
-            </div>
-            <div class="summary-label">
-                Failed
-            </div>
-        </div>
-
-    </div>
-
-
-    <div class="service-grid">
-
-__SERVICE_CARDS__
-
-    </div>
-
-</div>
-
-
-<!-- =========================================================
-     BUILD ACTIVITY
-     ========================================================= -->
-
-<div class="section">
-
-    <div class="section-heading">
-        <div class="section-title">
-            Build Activity
-        </div>
-    </div>
-
-    <div class="section-subtitle">
-        Build #__BUILD_NUMBER__ execution summary
-    </div>
-
-
-    <div class="timeline">
-
-
-        <div class="timeline-item">
-
-            <div class="timeline-dot"></div>
-
-            <div class="timeline-title">
-                01 · Source Checkout
-            </div>
-
-            <div class="timeline-description">
-                Jenkins checked out the source revision used for this deployment.
-            </div>
-
-            <div class="timeline-code">
-                Commit __GIT_COMMIT__
-            </div>
-
-        </div>
-
-
-        <div class="timeline-item">
-
-            <div class="timeline-dot"></div>
-
-            <div class="timeline-title">
-                02 · Project Validation
-            </div>
-
-            <div class="timeline-description">
-                Project files and Docker Compose configuration were validated successfully.
-            </div>
-
-            <div class="timeline-code">
-                docker compose config --quiet
-            </div>
-
-        </div>
-
-
-        <div class="timeline-item">
-
-            <div class="timeline-dot"></div>
-
-            <div class="timeline-title">
-                03 · Docker Image Build
-            </div>
-
-            <div class="timeline-description">
-                Backend, Nginx and Prometheus application-owned images were built.
-            </div>
-
-            <div class="timeline-code">
-                docker compose build
-            </div>
-
-        </div>
-
-
-        <div class="timeline-item">
-
-            <div class="timeline-dot"></div>
-
-            <div class="timeline-title">
-                04 · Infrastructure Images
-            </div>
-
-            <div class="timeline-description">
-                MySQL, Redis, Kafka, Kafka Connect, Grafana and cAdvisor images were pulled.
-            </div>
-
-            <div class="timeline-code">
-                docker compose pull
-            </div>
-
-        </div>
-
-
-        <div class="timeline-item">
-
-            <div class="timeline-dot"></div>
-
-            <div class="timeline-title">
-                05 · Deployment
-            </div>
-
-            <div class="timeline-description">
-                Docker Compose started or updated the E-Commerce platform services.
-            </div>
-
-            <div class="timeline-code">
-                docker compose up -d
-            </div>
-
-        </div>
-
-
-        <div class="timeline-item">
-
-            <div class="timeline-dot"></div>
-
-            <div class="timeline-title">
-                06 · Service Verification
-            </div>
-
-            <div class="timeline-description">
-                Jenkins verified Docker container state and healthcheck results.
-            </div>
-
-            <div class="timeline-code">
-                __RUNNING_SERVICES__/__TOTAL_SERVICES__ running
-            </div>
-
-        </div>
-
-
-        <div class="timeline-item">
-
-            <div class="timeline-dot"></div>
-
-            <div class="timeline-title">
-                07 · Deployment Confirmed
-            </div>
-
-            <div class="timeline-description">
-                The deployment completed successfully and the dashboard was generated automatically.
-            </div>
-
-            <div class="timeline-code">
-                __DEPLOYMENT_STATUS__
-            </div>
-
-        </div>
-
-
-    </div>
-
-</div>
-
-
-<div class="footer">
-
-    Generated automatically by Jenkins
-    • E-Commerce DevOps Project
-    • Build #__BUILD_NUMBER__
-    • __GENERATED__
-
-</div>
 
 
 </div>
 
 </body>
+
 </html>
-HTML_TEMPLATE
+
+HTML
 
 
-                    # -------------------------------------------------
-                    # INJECT SCALAR VALUES
-                    # -------------------------------------------------
+                    # =================================================
+                    # PREPARE DIAGRAM STATUS VALUES
+                    # =================================================
+
+                    nginx_status_class=$(printf '%s' "$nginx_status" | cut -d'|' -f1)
+                    nginx_status_label=$(printf '%s' "$nginx_status" | cut -d'|' -f2)
+
+                    backend_status_class=$(printf '%s' "$backend_status" | cut -d'|' -f1)
+                    backend_status_label=$(printf '%s' "$backend_status" | cut -d'|' -f2)
+
+                    mysql_status_class=$(printf '%s' "$mysql_status" | cut -d'|' -f1)
+                    mysql_status_label=$(printf '%s' "$mysql_status" | cut -d'|' -f2)
+
+                    redis_status_class=$(printf '%s' "$redis_status" | cut -d'|' -f1)
+                    redis_status_label=$(printf '%s' "$redis_status" | cut -d'|' -f2)
+
+                    kafka_status_class=$(printf '%s' "$kafka_status" | cut -d'|' -f1)
+                    kafka_status_label=$(printf '%s' "$kafka_status" | cut -d'|' -f2)
+
+                    kafka_connect_status_class=$(printf '%s' "$kafka_connect_status" | cut -d'|' -f1)
+                    kafka_connect_status_label=$(printf '%s' "$kafka_connect_status" | cut -d'|' -f2)
+
+                    prometheus_status_class=$(printf '%s' "$prometheus_status" | cut -d'|' -f1)
+                    prometheus_status_label=$(printf '%s' "$prometheus_status" | cut -d'|' -f2)
+
+                    grafana_status_class=$(printf '%s' "$grafana_status" | cut -d'|' -f1)
+                    grafana_status_label=$(printf '%s' "$grafana_status" | cut -d'|' -f2)
+
+                    cadvisor_status_class=$(printf '%s' "$cadvisor_status" | cut -d'|' -f1)
+                    cadvisor_status_label=$(printf '%s' "$cadvisor_status" | cut -d'|' -f2)
+
+
+                    # =================================================
+                    # SUBSTITUTE SCALAR VALUES
+                    # =================================================
+
                     sed \
-                        -e "s|__BUILD_NUMBER__|${build_number}|g" \
-                        -e "s|__GENERATED__|${generated}|g" \
-                        -e "s|__GIT_BRANCH__|${git_branch}|g" \
-                        -e "s|__GIT_COMMIT__|${git_commit}|g" \
-                        -e "s|__TOTAL_SERVICES__|${total_services}|g" \
-                        -e "s|__HEALTHY_SERVICES__|${healthy_services}|g" \
-                        -e "s|__RUNNING_SERVICES__|${running_services}|g" \
-                        -e "s|__STARTING_SERVICES__|${starting_services}|g" \
-                        -e "s|__FAILED_SERVICES__|${failed_services}|g" \
-                        -e "s|__DEPLOYMENT_CLASS__|${deployment_class}|g" \
-                        -e "s|__DEPLOYMENT_STATUS__|${deployment_status}|g" \
-                        -e "s|__DEPLOYMENT_DESCRIPTION__|${deployment_description}|g" \
+                        -e "s#__BUILD_NUMBER__#${build_number}#g" \
+                        -e "s#__GIT_COMMIT__#${git_commit}#g" \
+                        -e "s#__GIT_BRANCH__#${git_branch}#g" \
+                        -e "s#__GENERATED__#${generated}#g" \
+                        -e "s#__TOTAL_SERVICES__#${total_services}#g" \
+                        -e "s#__HEALTHY_SERVICES__#${healthy_services}#g" \
+                        -e "s#__RUNNING_SERVICES__#${running_services}#g" \
+                        -e "s#__STARTING_SERVICES__#${starting_services}#g" \
+                        -e "s#__FAILED_SERVICES__#${failed_services}#g" \
+                        -e "s#__NO_HEALTHCHECK_SERVICES__#${no_healthcheck_services}#g" \
+                        -e "s#__NGINX_STATUS_CLASS__#${nginx_status_class}#g" \
+                        -e "s#__NGINX_STATUS__#${nginx_status_label}#g" \
+                        -e "s#__BACKEND_STATUS_CLASS__#${backend_status_class}#g" \
+                        -e "s#__BACKEND_STATUS__#${backend_status_label}#g" \
+                        -e "s#__MYSQL_STATUS_CLASS__#${mysql_status_class}#g" \
+                        -e "s#__MYSQL_STATUS__#${mysql_status_label}#g" \
+                        -e "s#__REDIS_STATUS_CLASS__#${redis_status_class}#g" \
+                        -e "s#__REDIS_STATUS__#${redis_status_label}#g" \
+                        -e "s#__KAFKA_STATUS_CLASS__#${kafka_status_class}#g" \
+                        -e "s#__KAFKA_STATUS__#${kafka_status_label}#g" \
+                        -e "s#__KAFKA_CONNECT_STATUS_CLASS__#${kafka_connect_status_class}#g" \
+                        -e "s#__KAFKA_CONNECT_STATUS__#${kafka_connect_status_label}#g" \
+                        -e "s#__PROMETHEUS_STATUS_CLASS__#${prometheus_status_class}#g" \
+                        -e "s#__PROMETHEUS_STATUS__#${prometheus_status_label}#g" \
+                        -e "s#__GRAFANA_STATUS_CLASS__#${grafana_status_class}#g" \
+                        -e "s#__GRAFANA_STATUS__#${grafana_status_label}#g" \
+                        -e "s#__CADVISOR_STATUS_CLASS__#${cadvisor_status_class}#g" \
+                        -e "s#__CADVISOR_STATUS__#${cadvisor_status_label}#g" \
                         dashboard/index.template.html \
                         > dashboard/index.html
 
 
-                    # -------------------------------------------------
-                    # INSERT SERVICE CARDS
-                    #
-                    # Do NOT pass multiline HTML through awk -v.
-                    # awk reads the service_cards file directly.
-                    # -------------------------------------------------
+                    # =================================================
+                    # SAFELY INSERT SERVICE CARDS
+                    # =================================================
+
                     awk '
                         FILENAME == ARGV[1] {
                             cards = cards $0 ORS
@@ -2280,26 +2372,49 @@ HTML_TEMPLATE
                     mv dashboard/index.final.html dashboard/index.html
 
 
-                    # -------------------------------------------------
-                    # CLEAN TEMPORARY FILES
-                    # -------------------------------------------------
-                    rm -f dashboard/index.template.html
-                    rm -f dashboard/service_cards.html
+                    # =================================================
+                    # VALIDATE GENERATED DASHBOARD
+                    # =================================================
 
-
-                    # -------------------------------------------------
-                    # VALIDATE DASHBOARD
-                    # -------------------------------------------------
                     test -s dashboard/index.html
 
-                    grep -q "CI/CD Control Center" dashboard/index.html
-                    grep -q "CI/CD Pipeline Flow" dashboard/index.html
                     grep -q "E-Commerce Architecture" dashboard/index.html
-                    grep -q "Service Health" dashboard/index.html
-                    grep -q "Build Activity" dashboard/index.html
-                    grep -q "backend" dashboard/index.html
-                    grep -q "mysql" dashboard/index.html
-                    grep -q "grafana" dashboard/index.html
+
+                    grep -q "GitHub" dashboard/index.html
+
+                    grep -q "Jenkins CI/CD" dashboard/index.html
+
+                    grep -q "Docker Compose" dashboard/index.html
+
+                    grep -q "Nginx" dashboard/index.html
+
+                    grep -q "Node / Express" dashboard/index.html
+
+                    grep -q "MySQL" dashboard/index.html
+
+                    grep -q "Redis" dashboard/index.html
+
+                    grep -q "Kafka" dashboard/index.html
+
+                    grep -q "Kafka Connect" dashboard/index.html
+
+                    grep -q "Prometheus" dashboard/index.html
+
+                    grep -q "Grafana" dashboard/index.html
+
+                    grep -q "cAdvisor" dashboard/index.html
+
+                    grep -q "<svg" dashboard/index.html
+
+                    grep -q "marker-end" dashboard/index.html
+
+
+                    # =================================================
+                    # CLEAN TEMP FILES
+                    # =================================================
+
+                    rm -f dashboard/index.template.html
+                    rm -f dashboard/service_cards.html
 
 
                     echo ""
@@ -2307,110 +2422,100 @@ HTML_TEMPLATE
                     echo "Architecture dashboard generated"
                     echo "========================================="
 
-                    echo "Build: #${build_number}"
-                    echo "Git commit: ${git_commit}"
-                    echo "Git branch: ${git_branch}"
-                    echo "Deployment: ${deployment_status}"
+                    echo "Build: ${build_number}"
+                    echo "Commit: ${git_commit}"
+                    echo "Branch: ${git_branch}"
                     echo "Total services: ${total_services}"
                     echo "Healthy services: ${healthy_services}"
                     echo "Running services: ${running_services}"
                     echo "Starting services: ${starting_services}"
                     echo "Failed services: ${failed_services}"
+                    echo "No healthcheck services: ${no_healthcheck_services}"
 
                     echo ""
-                    echo "Dashboard file:"
+                    echo "Dashboard:"
                     ls -lh dashboard/index.html
-
-                    echo ""
-                    echo "Dashboard validation passed"
                 '''
             }
         }
     }
 
 
-    // =============================================================
+    // ================================================================
     // POST ACTIONS
-    // =============================================================
+    // ================================================================
+
     post {
 
         always {
 
             echo '========================================='
-            echo 'Pipeline Summary'
+            echo 'Final Docker Service Status'
             echo '========================================='
 
-
             sh '''
-                echo "Docker Compose service summary:"
-
-                docker compose ps \
-                    --format "{{.Service}}|{{.State}}|{{.Health}}" \
-                    || true
+                docker compose ps || true
             '''
 
+
+            echo '========================================='
+            echo 'Publishing Architecture Dashboard'
+            echo '========================================='
 
             script {
 
                 if (fileExists('dashboard/index.html')) {
 
-                    echo 'Publishing architecture dashboard'
-
-
-                    publishHTML(target: [
-
-                        allowMissing: true,
-
-                        alwaysLinkToLastBuild: true,
-
-                        keepAll: true,
-
-                        reportDir: 'dashboard',
-
-                        reportFiles: 'index.html',
-
-                        reportName:
-                            'E-Commerce Architecture Dashboard'
-
-                    ])
-
-
-                    archiveArtifacts(
-
-                        artifacts: 'dashboard/index.html',
-
-                        allowEmptyArchive: true
-
+                    publishHTML(
+                        target: [
+                            allowMissing: false,
+                            alwaysLinkToLastBuild: true,
+                            keepAll: true,
+                            reportDir: 'dashboard',
+                            reportFiles: 'index.html',
+                            reportName: 'E-Commerce CI/CD Architecture Dashboard',
+                            reportTitles: 'E-Commerce CI/CD Control Center'
+                        ]
                     )
 
                 } else {
 
-                    echo 'Architecture dashboard was not generated because an earlier pipeline stage failed.'
+                    echo 'Dashboard file was not generated.'
 
                 }
-
             }
 
 
-            echo 'Docker CI/CD pipeline finished'
+            archiveArtifacts(
+                artifacts: 'dashboard/index.html',
+                allowEmptyArchive: true,
+                fingerprint: true
+            )
         }
 
 
         success {
 
-            echo '========================================='
-            echo 'E-Commerce CI/CD pipeline completed successfully'
-            echo '========================================='
+            echo '''
+            =========================================
+            E-COMMERCE CI/CD PIPELINE SUCCESS
+            =========================================
+            Build completed successfully.
+            Architecture dashboard published.
+            =========================================
+            '''
         }
 
 
         failure {
 
-            echo '========================================='
-            echo 'E-Commerce CI/CD pipeline failed'
-            echo '========================================='
+            echo '''
+            =========================================
+            E-COMMERCE CI/CD PIPELINE FAILED
+            =========================================
+            Check the Jenkins console output.
+            =========================================
+            '''
         }
-
     }
-
 }
